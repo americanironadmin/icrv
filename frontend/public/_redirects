@@ -1,1 +1,8 @@
-/*    /index.html   200
+/                /index.html  200
+/contacts/*      /index.html  200
+/campaigns/*     /index.html  200
+/ai              /index.html  200
+/logs            /index.html  200
+/calls           /index.html  200
+/settings        /index.html  200
+/*               /index.html  404

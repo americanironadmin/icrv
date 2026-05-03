@@ -347,7 +347,7 @@ export function createAdminRouter(): Hono<HonoCtx> {
         results.elevenlabs = 'provisioned';
       } else {
         results.elevenlabs = 'already_exists';
-        results.elevenlabs_credential_id = existing.id;
+        results.elevenlabs_credential_id = existing!.id;
       }
 
       // ── ElevenLabs Conversational AI agent ──────────────────────────────────

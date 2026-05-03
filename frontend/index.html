@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow,noarchive" />
+    <meta name="description" content="ICRV operator dashboard. Internal use only." />
     <title>IRON CUSTOMER REACH VMAX</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -13,6 +15,12 @@
     />
   </head>
   <body>
+    <noscript>
+      <div style="padding:2rem;font-family:system-ui;color:#f0f0f0;background:#0a0a0a;min-height:100vh">
+        <h1>ICRV requires JavaScript</h1>
+        <p>This dashboard is a single-page application. Enable JavaScript to continue.</p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

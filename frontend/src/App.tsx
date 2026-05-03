@@ -13,7 +13,7 @@
 //      AuthGate listens and flips back to the SignIn screen.
 
 import React, { useEffect, useState, useCallback } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import { useApp } from './context/AppContext'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
@@ -26,6 +26,7 @@ import AIControlPanel from './pages/AIControlPanel'
 import ActivityLogs   from './pages/ActivityLogs'
 import CallMonitoring from './pages/CallMonitoring'
 import Settings       from './pages/Settings'
+import NotFound       from './pages/NotFound'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.icrv.app'
 
@@ -258,7 +259,7 @@ export default function App() {
             <Route path="/logs"        element={<ActivityLogs />} />
             <Route path="/calls"       element={<CallMonitoring />} />
             <Route path="/settings"    element={<Settings />} />
-            <Route path="*"            element={<Navigate to="/" replace />} />
+            <Route path="*"            element={<NotFound />} />
           </Routes>
         </main>
       </div>
