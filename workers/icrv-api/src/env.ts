@@ -2,6 +2,9 @@
 import type { BaseEnv } from '@icrv/shared/types';
 
 export interface ApiEnv extends BaseEnv {
+  // JTI revocation list (populated by /v1/auth/logout, checked by authMiddleware).
+  KV_REVOKED: KVNamespace;
+
   // Service bindings to other workers
   AGENT: Fetcher;   // icrv-agent (AI agent control plane)
   VOICE: Fetcher;   // icrv-voice (credential bootstrap)
@@ -29,6 +32,8 @@ export type ApiCtxVars = {
   user_id:   string;
   user_role: 'admin' | 'operator' | 'viewer';
   email:     string;
+  jwt_jti?:  string;     // present when the verified JWT carries a `jti` claim
+  jwt_exp?:  number;     // unix seconds — used to set KV_REVOKED TTL
 };
 
 export type HonoCtx = { Bindings: ApiEnv; Variables: ApiCtxVars };

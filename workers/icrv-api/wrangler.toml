@@ -31,6 +31,12 @@ id      = "878fe6fdfa844b9d96df8017ac39ee63"
 [[kv_namespaces]]
 binding = "KV_TRACK"
 id      = "7926181a73194dd2a2e14307cb7d4a27"
+# KV_REVOKED — JTI revocation list for /v1/auth/logout. TTL'd entries clean up
+# automatically. Provision with: wrangler kv namespace create KV_REVOKED, then
+# replace the placeholder id below with the returned id.
+[[kv_namespaces]]
+binding = "KV_REVOKED"
+id      = "REPLACE_ME_KV_REVOKED_ID"
 
 [[r2_buckets]]
 binding     = "R2_MEDIA"

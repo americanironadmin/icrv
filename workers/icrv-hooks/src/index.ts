@@ -21,6 +21,7 @@
 import { Hono } from 'hono';
 import type { BaseEnv, InboundEmailPayload, InboundWaPayload, VoicePostcallPayload } from '@icrv/shared/types';
 import { uuidv4, nowISO, hmacSha256Hex, timingSafeEqual, verifyGoogleJwt, fromBase64Url } from '@icrv/shared/crypto';
+import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
 
 interface HooksEnv extends BaseEnv {
   WA_APP_SECRET:       string;
@@ -31,6 +32,14 @@ interface HooksEnv extends BaseEnv {
 }
 
 const app = new Hono<{ Bindings: HooksEnv }>();
+
+// Per-IP cap on this whole worker. 600/min/IP comfortably absorbs legitimate
+// webhook bursts (e.g. WA template fan-out) while blunting abuse — every
+// handler still verifies HMAC after this gate.
+app.use('*', rateLimit({
+  max: 600, windowSec: 60,
+  keyFn: (c) => `hooks:${cfIp(c)}`,
+}));
 
 app.get('/health', (c) => c.json({ ok: true, service: 'icrv-hooks', ts: nowISO() }));
 

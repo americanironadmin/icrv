@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import type { HonoCtx } from '../env';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
+import { requireAdmin } from '../auth';
 
 export function createDashboardRouter(): Hono<HonoCtx> {
   const app = new Hono<HonoCtx>();
@@ -265,6 +266,23 @@ export function createAuthRouter(): Hono<HonoCtx> {
     return c.json({ connected: true, email: row.email, oauth_token_id: row.id, connected_at: row.created_at });
   });
 
+  // ── Logout — revoke this JWT's JTI in KV_REVOKED ──────────────────────────
+  // PR 6 will add `logout_url` so the frontend can finish the Cloudflare Access
+  // session by redirecting to /cdn-cgi/access/logout. This PR ships the
+  // revocation half so leaked tokens stop working immediately.
+  app.post('/logout', async (c) => {
+    const jti = c.get('jwt_jti');
+    const exp = c.get('jwt_exp');
+    if (jti && c.env.KV_REVOKED) {
+      const ttl = exp ? Math.max(60, exp - Math.floor(Date.now() / 1000)) : 86400;
+      await c.env.KV_REVOKED.put(`revoked:${jti}`, '1', { expirationTtl: ttl });
+    }
+    return new Response(null, {
+      status: 204,
+      headers: { 'Clear-Site-Data': '"cookies"' },
+    });
+  });
+
   return app;
 }
 
@@ -274,10 +292,7 @@ export function createAdminRouter(): Hono<HonoCtx> {
   const app = new Hono<HonoCtx>();
 
   // Enforce admin-only for all /admin routes
-  app.use('*', async (c, next) => {
-    if (c.get('user_role') !== 'admin') return c.json({ error: 'admin_required' }, 403);
-    await next();
-  });
+  app.use('*', requireAdmin);
 
   /**
    * POST /v1/admin/bootstrap-credentials

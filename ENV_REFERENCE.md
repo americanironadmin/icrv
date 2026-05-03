@@ -213,3 +213,32 @@ bash scripts/deploy-all.sh
 #   - Telephony add-on enabled (required for outbound phone calls)
 #   - Phone number registered (for outbound calling fromPhone)
 #   - Agent ID stored in campaign config or trigger payload
+
+# ────────────────────────────────────────────────────────────────────
+# Rate limiting (PR 3)
+# ────────────────────────────────────────────────────────────────────
+# Implemented in packages/shared/src/rate-limit.ts; backed by KV_RATE
+# (already provisioned on every worker). Buckets are 60 s sliding-ish
+# windows keyed off CF-Connecting-IP plus optional tenant_id.
+#
+#   /v1/auth/*          10 req / 60 s / IP
+#   /v1/* (post-auth)   120 req / 60 s / (IP + tenant)
+#   icrv-hooks all      600 req / 60 s / IP   (absorbs legit webhook bursts)
+#   icrv-voice all      240 req / 60 s / IP   (covers /llm/v1/* burstiness)
+#
+# Misconfigured bindings fail open (do not block traffic). On overflow the
+# response is 429 with Retry-After + X-RateLimit-* headers.
+
+# ────────────────────────────────────────────────────────────────────
+# Token revocation (PR 3)
+# ────────────────────────────────────────────────────────────────────
+
+KV_REVOKED
+  Worker(s): icrv-api
+  Type:      KV namespace
+  Provision: wrangler kv namespace create KV_REVOKED
+  Purpose:   POST /v1/auth/logout writes `revoked:<jti>` here with TTL =
+             (token exp − now). authMiddleware checks it before every
+             /v1/* request. After provisioning, replace
+             REPLACE_ME_KV_REVOKED_ID in workers/icrv-api/wrangler.toml
+             with the returned namespace id, then `wrangler deploy`.

@@ -18,6 +18,7 @@ interface JwtPayload {
   role: 'admin' | 'operator' | 'viewer';
   exp: number;
   iat: number;
+  jti?: string;         // JWT ID — required for revocation; CF Access mints it.
 }
 
 // HS256 verification for our internal JWTs
@@ -117,6 +118,12 @@ export async function authMiddleware(c: Context<HonoCtx>, next: () => Promise<vo
 
   if (!payload) return c.json({ error: 'unauthorized' }, 401);
 
+  // Revocation check — POST /v1/auth/logout writes `revoked:<jti>` here.
+  if (payload.jti && c.env.KV_REVOKED) {
+    const revoked = await c.env.KV_REVOKED.get(`revoked:${payload.jti}`);
+    if (revoked) return c.json({ error: 'unauthorized', detail: 'token_revoked' }, 401);
+  }
+
   let tenantId: string, userId: string, role: 'admin'|'operator'|'viewer';
 
   if (payload.tenant_id && payload.role) {
@@ -141,6 +148,8 @@ export async function authMiddleware(c: Context<HonoCtx>, next: () => Promise<vo
   c.set('user_id',   vars.user_id);
   c.set('user_role', vars.user_role);
   c.set('email',     vars.email);
+  if (payload.jti) c.set('jwt_jti', payload.jti);
+  if (payload.exp) c.set('jwt_exp', payload.exp);
 
   await next();
 }
@@ -152,4 +161,17 @@ export function requireRole(allowed: Array<'admin'|'operator'|'viewer'>) {
     if (!allowed.includes(role)) return c.json({ error: 'forbidden' }, 403);
     await next();
   };
+}
+
+// Named middlewares so the admin-only and not-viewer gates are unified across
+// routers and directly testable. Production routes mount these instead of
+// reimplementing the role check inline.
+export async function requireAdmin(c: Context<HonoCtx>, next: () => Promise<void>): Promise<Response | void> {
+  if (c.get('user_role') !== 'admin') return c.json({ error: 'admin_required' }, 403);
+  await next();
+}
+
+export async function requireNotViewer(c: Context<HonoCtx>, next: () => Promise<void>): Promise<Response | void> {
+  if (c.get('user_role') === 'viewer') return c.json({ error: 'forbidden' }, 403);
+  await next();
 }

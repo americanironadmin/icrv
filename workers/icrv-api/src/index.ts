@@ -15,13 +15,22 @@
 // `script_name = "icrv-api"` in their wrangler.toml.
 
 import { Hono } from 'hono';
-import { authMiddleware } from './auth';
+import { authMiddleware, requireNotViewer } from './auth';
 import type { HonoCtx, ApiEnv } from './env';
 import { createContactsRouter }  from './routes/contacts';
 import { createCampaignsRouter, createTemplatesRouter } from './routes/campaigns';
 import { createCallsRouter }     from './routes/calls';
 import { createDashboardRouter, createLogsRouter, createAuthRouter, createAdminRouter } from './routes/misc';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
+import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
+
+// Single source of truth for the CORS allowlist. PR 7 will drop the temporary
+// pages.dev origin once app.icrv.app DNS is live.
+export const CORS_ALLOWLIST: ReadonlySet<string> = new Set([
+  'https://app.icrv.app',
+  'http://localhost:5173',
+  'https://icrv-dashboard.pages.dev',
+]);
 
 // Re-export Durable Object classes so Cloudflare can register them on this script.
 export { CampaignCoordinatorDO } from './do/campaign-coordinator';
@@ -31,24 +40,39 @@ export { OAuthRotatorDO }        from './do/oauth-rotator';
 
 const app = new Hono<HonoCtx>();
 
-// ─── CORS — same-origin in prod, permissive locally ───────────────────────────
+// ─── CORS — single source of truth ────────────────────────────────────────────
+// Reflects allowlisted origins, always emits Vary: Origin (closes M2 — would
+// otherwise be a CORS-poisoning bug if a CDN ever cached responses). Rejects
+// credentialed preflights from non-allowlisted origins by responding without
+// the credentials header (browser then blocks the request).
 app.use('*', async (c, next) => {
   const origin = c.req.header('Origin') ?? '';
-  const allowList = new Set(['https://app.icrv.app', 'http://localhost:5173', 'https://icrv-dashboard.pages.dev']);
+  const allowed = CORS_ALLOWLIST.has(origin);
+
   if (c.req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin':      allowList.has(origin) ? origin : 'https://app.icrv.app',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Allow-Methods':     'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-        'Access-Control-Allow-Headers':     'Content-Type,Authorization,Cf-Access-Jwt-Assertion',
-        'Access-Control-Max-Age':           '600',
-      },
-    });
+    const headers: Record<string, string> = {
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type,Authorization,Cf-Access-Jwt-Assertion',
+      'Access-Control-Max-Age':       '600',
+      'Vary':                         'Origin',
+    };
+    if (allowed) {
+      headers['Access-Control-Allow-Origin']      = origin;
+      headers['Access-Control-Allow-Credentials'] = 'true';
+    }
+    return new Response(null, { status: 204, headers });
   }
+
   await next();
-  if (allowList.has(origin)) {
+
+  // Always emit Vary: Origin whenever the response is origin-dependent so any
+  // future cache layer keys correctly.
+  const existingVary = c.res.headers.get('Vary');
+  c.res.headers.set('Vary', existingVary && !/(^|,\s*)Origin(\s*,|$)/i.test(existingVary)
+    ? `${existingVary}, Origin`
+    : 'Origin');
+
+  if (allowed) {
     c.res.headers.set('Access-Control-Allow-Origin', origin);
     c.res.headers.set('Access-Control-Allow-Credentials', 'true');
   }
@@ -199,6 +223,18 @@ app.get('/dev/gen-token', async (c) => {
 // ── END TEMPORARY ──────────────────────────────────────────────────────────────
 
 const v1 = new Hono<HonoCtx>();
+
+// Rate limit before auth so brute-force probes burn KV writes, not DB lookups.
+// Tight cap on /v1/auth/*; broader cap on the rest of /v1/*.
+v1.use('/auth/*', rateLimit({
+  max: 10, windowSec: 60,
+  keyFn: (c) => `auth:${cfIp(c)}`,
+}));
+v1.use('*', rateLimit({
+  max: 120, windowSec: 60,
+  keyFn: (c) => `api:${cfIp(c)}:${(c.get('tenant_id') as string | undefined) ?? 'anon'}`,
+}));
+
 v1.use('*', authMiddleware);
 
 v1.route('/auth',      createAuthRouter());
@@ -209,6 +245,11 @@ v1.route('/templates', createTemplatesRouter());
 v1.route('/calls',     createCallsRouter());
 v1.route('/dashboard', createDashboardRouter());
 v1.route('/logs',      createLogsRouter());
+
+// /v1/agent-controls/* — defense-in-depth: viewers blocked at the gateway in
+// addition to whatever icrv-agent enforces internally. Closes the M6 risk where
+// a UI-only gate was the only barrier between viewers and the kill-switch.
+v1.use('/agent-controls/*', requireNotViewer);
 
 // /v1/agent-controls/* — proxy to icrv-agent via service binding.
 // Identity is forwarded as trusted X-Tenant-ID / X-User-ID / X-User-Role headers
@@ -232,11 +273,16 @@ v1.all('/agent-controls/*', async (c) => {
   };
   const agentRes = await c.env.AGENT.fetch(new Request(targetUrl, init));
 
-  // Clone and apply CORS headers to the mutable copy
+  // Clone the response so CORS headers are mutable. Pull from the unified
+  // CORS_ALLOWLIST constant and always set Vary: Origin so the answer is
+  // correctly cache-keyed if a CDN ever sits in front.
   const origin = c.req.header('Origin') ?? '';
-  const corsOrigins = new Set(['https://app.icrv.app', 'http://localhost:5173', 'https://icrv-dashboard.pages.dev']);
   const newHeaders = new Headers(agentRes.headers);
-  if (corsOrigins.has(origin)) {
+  const existingVary = newHeaders.get('Vary');
+  newHeaders.set('Vary', existingVary && !/(^|,\s*)Origin(\s*,|$)/i.test(existingVary)
+    ? `${existingVary}, Origin`
+    : 'Origin');
+  if (CORS_ALLOWLIST.has(origin)) {
     newHeaders.set('Access-Control-Allow-Origin', origin);
     newHeaders.set('Access-Control-Allow-Credentials', 'true');
   }

@@ -22,6 +22,7 @@ import { uuidv4, nowISO, encryptSecret } from '@icrv/shared/crypto';
 import { isDuplicate, scheduleRetry } from '@icrv/shared/queue-helpers';
 import { loadRcCredentials, loadElCredentials } from '@icrv/shared/credentials';
 import { RingCentralClient } from '@icrv/shared/ring-central-client';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@icrv/shared/rate-limit';
 
 interface VoiceEnv extends BaseEnv {
   ANTHROPIC_API_KEY:    string;
@@ -40,6 +41,19 @@ interface VoiceEnv extends BaseEnv {
 export default {
   async fetch(req: Request, env: VoiceEnv): Promise<Response> {
     const url = new URL(req.url);
+
+    // Per-IP rate limit on all HTTP entries. The /llm/v1/* path bursts under
+    // load (one request per turn during a live call), so 240/min/IP gives
+    // headroom while still blunting abuse.
+    if (env.KV_RATE) {
+      const decision = await checkRateLimit(
+        env.KV_RATE,
+        `voice:${clientIp(req)}`,
+        240,
+        60,
+      );
+      if (!decision.allowed) return rateLimitedResponse(decision);
+    }
 
     if (url.pathname === '/health') {
       return Response.json({

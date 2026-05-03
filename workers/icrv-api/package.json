@@ -6,7 +6,8 @@
   "scripts": {
     "deploy":    "wrangler deploy",
     "dev":       "wrangler dev",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test":      "vitest run"
   },
   "dependencies": {
     "@icrv/shared": "*",
@@ -15,6 +16,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240924.0",
     "typescript": "^5.6.3",
-    "wrangler": "^3.80.0"
+    "wrangler": "^3.80.0",
+    "vitest": "^2.1.4"
   }
 }
