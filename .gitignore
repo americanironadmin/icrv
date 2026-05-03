@@ -6,7 +6,6 @@ dist
 _write_probe.txt
 ICRV-Production-Audit.md
 CC-PROMPT-icrv-hardening.md
-HARDENING_REPORT.md
 .env
 .env.local
 .env.*.local

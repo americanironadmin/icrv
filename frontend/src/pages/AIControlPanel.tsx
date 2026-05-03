@@ -58,9 +58,13 @@ function RejectModal({
 }) {
   const { showToast } = useApp()
   const [reason, setReason]   = useState('')
+  const [typed,  setTyped]    = useState('')
   const [busy,   setBusy]     = useState(false)
+  // PR 7 / L5: type REJECT to enable the destructive button.
+  const enabled = typed.trim() === 'REJECT'
 
   const submit = async () => {
+    if (!enabled) return
     setBusy(true)
     try {
       await agentApi.rejectRun(runId, reason || undefined)
@@ -93,10 +97,24 @@ function RejectModal({
               style={{ minHeight: 80 }}
             />
           </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="reject-confirm">
+              Type <code style={{ color: 'var(--red)', fontWeight: 700 }}>REJECT</code> to enable the button
+            </label>
+            <input
+              id="reject-confirm"
+              className="form-control"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn btn-danger" onClick={submit} disabled={busy}>
+          <button className="btn btn-danger" onClick={submit} disabled={busy || !enabled}>
             {busy ? 'Rejecting…' : 'Reject Run'}
           </button>
         </div>
@@ -117,6 +135,10 @@ function KillSwitchModal({
   onConfirm: (reason?: string) => void
 }) {
   const [reason, setReason] = useState('')
+  // PR 7 / L5: type STOP to enable. Only the destructive (activate) path is
+  // gated — re-enabling the agent is non-destructive.
+  const [typed, setTyped]   = useState('')
+  const enabled = !activating || typed.trim() === 'STOP'
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -134,21 +156,38 @@ function KillSwitchModal({
               : 'This will re-enable AI agent activity. The agent will resume processing queued runs according to configured controls.'}
           </p>
           {activating && (
-            <div className="form-group">
-              <label className="form-label">Reason (optional)</label>
-              <input
-                className="form-control"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. Investigating anomalous send volume"
-              />
-            </div>
+            <>
+              <div className="form-group">
+                <label className="form-label">Reason (optional)</label>
+                <input
+                  className="form-control"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. Investigating anomalous send volume"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="kill-confirm">
+                  Type <code style={{ color: 'var(--red)', fontWeight: 700 }}>STOP</code> to enable the button
+                </label>
+                <input
+                  id="kill-confirm"
+                  className="form-control"
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+            </>
           )}
         </div>
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button
             className={activating ? 'btn btn-danger' : 'btn btn-primary'}
+            disabled={!enabled}
             onClick={() => onConfirm(reason || undefined)}
           >
             {activating ? 'Activate Kill Switch' : 'Re-enable Agent'}

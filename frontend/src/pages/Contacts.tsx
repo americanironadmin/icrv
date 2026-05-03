@@ -6,6 +6,7 @@ import Papa from 'papaparse'
 import { contactsApi, type Contact, type ContactCreatePayload, type BulkUploadResponse, type UploadJobStatus } from '@/api/contacts'
 import { useApp } from '@/context/AppContext'
 import { formatDistanceToNow } from 'date-fns'
+import { ConfirmModal } from '@/components/ConfirmModal'
 
 // ── Contact Form Modal ────────────────────────────────────────────────────────
 
@@ -353,13 +354,15 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
 function ContactDetail({ contact, onEdit, onDelete }: { contact: Contact; onEdit: () => void; onDelete: () => void }) {
   const { showToast } = useApp()
   const [deleting, setDeleting] = useState(false)
+  // PR 7 / L5: type-to-confirm modal instead of the browser's native confirm().
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
-  const handleDelete = async () => {
-    if (!confirm(`Delete ${contact.name}?`)) return
+  const performDelete = async () => {
     setDeleting(true)
     try {
       await contactsApi.delete(contact.id)
       showToast({ type: 'success', title: 'Contact deleted', message: contact.name })
+      setConfirmOpen(false)
       onDelete()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Delete failed'
@@ -375,9 +378,18 @@ function ContactDetail({ contact, onEdit, onDelete }: { contact: Contact; onEdit
         <span className="card-title">Contact Profile</span>
         <div style={{ display: 'flex', gap: '0.4rem' }}>
           <button className="btn btn-secondary btn-sm" onClick={onEdit}>Edit</button>
-          <button className="btn btn-danger btn-sm" onClick={handleDelete} disabled={deleting}>
+          <button className="btn btn-danger btn-sm" onClick={() => setConfirmOpen(true)} disabled={deleting}>
             {deleting ? '…' : 'Delete'}
           </button>
+          <ConfirmModal
+            open={confirmOpen}
+            title="Delete contact"
+            body={`This permanently deletes ${contact.name} and any associated activity history. This cannot be undone.`}
+            confirmWord="DELETE"
+            confirmLabel="DELETE CONTACT"
+            onConfirm={performDelete}
+            onClose={() => setConfirmOpen(false)}
+          />
         </div>
       </div>
 
