@@ -27,6 +27,7 @@ import ActivityLogs   from './pages/ActivityLogs'
 import CallMonitoring from './pages/CallMonitoring'
 import Settings       from './pages/Settings'
 import NotFound       from './pages/NotFound'
+import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.icrv.app'
 
@@ -252,13 +253,13 @@ export default function App() {
         <Sidebar />
         <main className="app-content">
           <Routes>
-            <Route path="/"            element={<Dashboard />} />
-            <Route path="/contacts/*"  element={<Contacts />} />
-            <Route path="/campaigns/*" element={<Campaigns />} />
-            <Route path="/ai"          element={<AIControlPanel />} />
-            <Route path="/logs"        element={<ActivityLogs />} />
-            <Route path="/calls"       element={<CallMonitoring />} />
-            <Route path="/settings"    element={<Settings />} />
+            <Route path="/"            element={<RouteErrorBoundary routeLabel="DASHBOARD"><Dashboard /></RouteErrorBoundary>} />
+            <Route path="/contacts/*"  element={<RouteErrorBoundary routeLabel="CONTACTS"><Contacts /></RouteErrorBoundary>} />
+            <Route path="/campaigns/*" element={<RouteErrorBoundary routeLabel="CAMPAIGNS"><Campaigns /></RouteErrorBoundary>} />
+            <Route path="/ai"          element={<RouteErrorBoundary routeLabel="AI CONTROL"><AIControlPanel /></RouteErrorBoundary>} />
+            <Route path="/logs"        element={<RouteErrorBoundary routeLabel="ACTIVITY LOGS"><ActivityLogs /></RouteErrorBoundary>} />
+            <Route path="/calls"       element={<RouteErrorBoundary routeLabel="CALL MONITORING"><CallMonitoring /></RouteErrorBoundary>} />
+            <Route path="/settings"    element={<RouteErrorBoundary routeLabel="SETTINGS"><Settings /></RouteErrorBoundary>} />
             <Route path="*"            element={<NotFound />} />
           </Routes>
         </main>

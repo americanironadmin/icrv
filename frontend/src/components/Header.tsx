@@ -12,6 +12,18 @@ const SERVICE_LABELS: Record<string, string> = {
   elevenlabs: 'EL',
 }
 
+// PR 5 / M7: never render raw upstream error strings in the operator UI —
+// they can leak hostnames, stack traces, or vendor-side credential context.
+function friendlyServiceError(err: string | undefined, service: string): string | undefined {
+  if (!err) return undefined
+  const label = SERVICE_LABELS[service] ?? service
+  if (/token.*expir/i.test(err))            return `${label}: token expired — reauthorize in Settings`
+  if (/quota|rate.?limit|429|too\s*many/i.test(err)) return `${label}: rate limited — retry shortly`
+  if (/unauthor|forbidden|401|403/i.test(err)) return `${label}: not authorised — re-link in Settings`
+  if (/timeout|timed\s*out/i.test(err))     return `${label}: timed out — retry shortly`
+  return `${label}: connection error — check logs`
+}
+
 export default function Header() {
   const { user, agentControls } = useApp()
   const agentActive = isAgentActive(agentControls)
@@ -112,7 +124,7 @@ export default function Header() {
         {services.map((svc) => (
           <div
             key={svc.service}
-            title={svc.error ?? (svc.connected ? 'Connected' : 'Disconnected')}
+            title={friendlyServiceError(svc.error, svc.service) ?? (svc.connected ? 'Connected' : 'Disconnected')}
             style={{
               display: 'flex',
               alignItems: 'center',

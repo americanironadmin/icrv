@@ -1,5 +1,9 @@
 // src/hooks/usePolling.ts
-// Generic polling hook — drives real-time updates for dashboard, call monitoring
+// Generic polling hook — drives real-time updates for dashboard, call monitoring.
+//
+// Visibility-aware (PR 5 / H4): when the tab is hidden, the interval is cleared
+// to avoid burning Workers requests on a tab nobody is watching. On focus we
+// fire one immediate fetch and re-arm the interval.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
@@ -45,9 +49,38 @@ export function usePolling<T>({
 
   useEffect(() => {
     if (!enabled) return
+
+    let intervalId: ReturnType<typeof setInterval> | null = null
+
+    const arm = () => {
+      if (intervalId !== null) return
+      intervalId = setInterval(doFetch, intervalMs)
+    }
+    const disarm = () => {
+      if (intervalId === null) return
+      clearInterval(intervalId)
+      intervalId = null
+    }
+
+    const onVisibility = () => {
+      if (document.hidden) {
+        disarm()
+      } else {
+        // Re-armed: catch up immediately, then resume the cadence.
+        doFetch()
+        arm()
+      }
+    }
+
+    // Initial: only fetch + arm if the tab is currently visible.
     doFetch()
-    const id = setInterval(doFetch, intervalMs)
-    return () => clearInterval(id)
+    if (!document.hidden) arm()
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      disarm()
+    }
   }, [doFetch, intervalMs, enabled])
 
   return { data, loading, error, refresh: doFetch }

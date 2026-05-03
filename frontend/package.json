@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && VITE_BUILD_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo dev) vite build",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler pages deploy dist --project-name icrv-dashboard"
   },

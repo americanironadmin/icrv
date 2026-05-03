@@ -243,13 +243,23 @@ export function createContactsRouter(): Hono<HonoCtx> {
   });
 
   // POST /v1/contacts/bulk-upload   (multipart/form-data, field: file)
+  // PR 5 / H6: hard caps to match the client guardrails — Content-Length is
+  // checked first so an oversized request is rejected before we buffer the
+  // body, and the post-parse row count refuses files with too many records.
   app.post('/bulk-upload', async (c) => {
     if (c.get('user_role') === 'viewer') return c.json({ error: 'forbidden' }, 403);
+
+    const MAX_BYTES = 10 * 1024 * 1024;
+    const MAX_ROWS  = 50_000;
+    const declaredLen = Number.parseInt(c.req.header('Content-Length') ?? '0', 10);
+    if (declaredLen > MAX_BYTES) {
+      return c.json({ error: 'file_too_large', max_bytes: MAX_BYTES }, 413);
+    }
 
     const form = await c.req.formData();
     const file = form.get('file');
     if (!(file instanceof File)) return c.json({ error: 'file_field_required' }, 400);
-    if (file.size > 10 * 1024 * 1024) return c.json({ error: 'file_too_large_10mb_max' }, 413);
+    if (file.size > MAX_BYTES) return c.json({ error: 'file_too_large', max_bytes: MAX_BYTES }, 413);
 
     const tenantId = c.get('tenant_id');
     const userId   = c.get('user_id');
@@ -267,6 +277,12 @@ export function createContactsRouter(): Hono<HonoCtx> {
 
     // Inline CSV parse — supports quoted fields and embedded commas.
     const { rows, headers } = parseCsv(csvText);
+    if (rows.length > MAX_ROWS) {
+      await c.env.DB.prepare(
+        `UPDATE upload_jobs SET status='failed', errors_json=?, updated_at=?, completed_at=? WHERE id=?`,
+      ).bind(JSON.stringify([{ row: 0, reason: `too_many_rows_max_${MAX_ROWS}` }]), nowISO(), nowISO(), jobId).run();
+      return c.json({ error: 'too_many_rows', max_rows: MAX_ROWS, got: rows.length }, 413);
+    }
     const requiredHeaders = ['name'];
     for (const h of requiredHeaders) {
       if (!headers.includes(h)) {

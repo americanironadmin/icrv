@@ -127,7 +127,7 @@ export default function Sidebar() {
             textAlign: 'center',
           }}
         >
-          ICRV v1.0.0 · CF Workers
+          ICRV {import.meta.env.VITE_BUILD_SHA ?? 'dev'} · CF Workers
         </div>
       </div>
     </aside>

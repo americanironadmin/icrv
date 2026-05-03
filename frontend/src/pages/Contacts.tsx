@@ -164,21 +164,68 @@ function ContactForm({ contact, onClose, onSaved }: ContactFormProps) {
 
 // ── Bulk Upload Modal ─────────────────────────────────────────────────────────
 
+// PR 5 / H6 guardrails: refuse the upload client-side before we send the file.
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+const MAX_UPLOAD_ROWS  = 50_000
+// PR 5 / H7: bulk-upload poll caps out — beyond this the modal closes and the
+// user is steered to the Logs page so the dashboard never deadlocks on a
+// stalled job.
+const MAX_POLL_MS = 5 * 60 * 1000
+
 function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { showToast } = useApp()
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string[][]>([])
   const [uploading, setUploading] = useState(false)
   const [jobStatus, setJobStatus] = useState<UploadJobStatus | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null)
+  const deadlineRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleFile = (f: File) => {
-    setFile(f)
+    if (f.size > MAX_UPLOAD_BYTES) {
+      showToast({
+        type: 'error',
+        title: 'File too large',
+        message: `Max ${(MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0)} MB — got ${(f.size / 1024 / 1024).toFixed(1)} MB`,
+      })
+      return
+    }
+    // Streaming row count via Papa.parse step callback — bails as soon as we
+    // pass the cap so we don't materialise the whole file in memory.
+    let rowCount = 0
+    let aborted  = false
     Papa.parse<string[]>(f, {
-      preview: 6,
-      complete: (results) => setPreview(results.data as string[][]),
+      step: (_row, parser) => {
+        rowCount++
+        if (rowCount > MAX_UPLOAD_ROWS) {
+          aborted = true
+          parser.abort()
+        }
+      },
+      complete: () => {
+        if (aborted) {
+          showToast({
+            type: 'error',
+            title: 'Too many rows',
+            message: `Max ${MAX_UPLOAD_ROWS.toLocaleString()} rows — split the file and retry`,
+          })
+          return
+        }
+        setFile(f)
+        // Re-parse a small preview now that we've validated the row count.
+        Papa.parse<string[]>(f, {
+          preview: 6,
+          complete: (results) => setPreview(results.data as string[][]),
+          error: () => showToast({ type: 'error', title: 'CSV Parse Error', message: 'Could not read file' }),
+        })
+      },
       error: () => showToast({ type: 'error', title: 'CSV Parse Error', message: 'Could not read file' }),
     })
+  }
+
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    if (deadlineRef.current) { clearTimeout(deadlineRef.current); deadlineRef.current = null }
   }
 
   const upload = async () => {
@@ -187,12 +234,22 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
     try {
       const res: BulkUploadResponse = await contactsApi.bulkUpload(file)
       showToast({ type: 'info', title: 'Upload queued', message: `Job ${res.job_id} — ${res.total_rows} rows` })
-      // Poll job status
+      // Hard 5-minute deadline so a stuck job can't poll forever.
+      deadlineRef.current = setTimeout(() => {
+        stopPolling()
+        showToast({
+          type: 'info',
+          title: 'Upload still processing',
+          message: 'Check the Logs page for status.',
+        })
+        onClose()
+      }, MAX_POLL_MS)
+
       pollRef.current = setInterval(async () => {
         const status = await contactsApi.getUploadJob(res.job_id)
         setJobStatus(status)
         if (status.status === 'completed' || status.status === 'failed') {
-          if (pollRef.current) clearInterval(pollRef.current)
+          stopPolling()
           if (status.status === 'completed') {
             showToast({ type: 'success', title: 'Upload complete', message: `${status.accepted} contacts imported` })
             onDone()
@@ -209,7 +266,7 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
     }
   }
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+  useEffect(() => () => stopPolling(), [])
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
