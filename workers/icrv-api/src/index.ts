@@ -56,6 +56,19 @@ app.use('*', async (c, next) => {
 
 app.get('/health', (c) => c.json({ ok: true, service: 'icrv-api', ts: new Date().toISOString() }));
 
+// CSP violation receiver. No auth, no CORS — browsers POST these directly.
+// Accepts both `application/csp-report` (legacy) and `application/reports+json`.
+// Logs to console for now; Sentry will pick these up once PR 4 lands.
+app.post('/csp-report', async (c) => {
+  try {
+    const body = await c.req.text();
+    console.warn('[csp-report]', body.slice(0, 4096));
+  } catch (err) {
+    console.warn('[csp-report] parse failed', (err as Error).message);
+  }
+  return new Response(null, { status: 204 });
+});
+
 // ─── Google OAuth callback — mounted OUTSIDE /v1 (comes from Google, no user JWT) ─
 // Redirect URI registered in Google Cloud Console:
 //   https://icrv-api.americanironadmin.workers.dev/oauth/google/callback
