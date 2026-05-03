@@ -15,9 +15,12 @@
 // batch; errors are recorded to agent_runs.failed_reason and DLQ on retry.
 
 import { Hono } from 'hono';
+import { withSentry } from '@sentry/cloudflare';
+import type { ExportedHandler as CFExportedHandler } from '@cloudflare/workers-types';
 import type { BaseEnv, AgentJobPayload, RetryPayload } from '@icrv/shared/types';
 import { uuidv4, nowISO } from '@icrv/shared/crypto';
 import { isDuplicate, scheduleRetry } from '@icrv/shared/queue-helpers';
+import { scrubPii } from '@icrv/shared/sentry-scrub';
 
 import { createControlPanelRouter } from './control-panel';
 import { loadRunContext }  from './context-loader';
@@ -39,7 +42,7 @@ const app = new Hono<{ Bindings: AgentEnv }>();
 app.get('/health', (c) => c.json({ ok: true, service: 'icrv-agent', model: c.env.AI_MODEL }));
 app.route('/v1/agent-controls', createControlPanelRouter());
 
-export default {
+const handler: ExportedHandler<AgentEnv, AgentJobPayload | RetryPayload> = {
   fetch: app.fetch,
 
   async queue(batch: MessageBatch<AgentJobPayload | RetryPayload>, env: AgentEnv): Promise<void> {
@@ -57,7 +60,23 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<AgentEnv, AgentJobPayload | RetryPayload>;
+};
+
+// See icrv-api/src/index.ts for why CFExportedHandler is imported explicitly.
+// The QueueHandlerMessage generic is widened here so the wrapper satisfies
+// Sentry's `ExportedHandler<any>` constraint — `handler` itself is still typed
+// against the precise payload union at its declaration above.
+export default withSentry<CFExportedHandler<AgentEnv>>(
+  (env) => ({
+    dsn:               env.SENTRY_DSN ?? '',
+    environment:       env.ENVIRONMENT ?? 'production',
+    tracesSampleRate:  0.1,
+    sendDefaultPii:    false,
+    beforeSend:        scrubPii,
+    beforeSendTransaction: scrubPii,
+  }),
+  handler as CFExportedHandler<AgentEnv>,
+);
 
 // ─── Pipeline ──────────────────────────────────────────────────────────────
 

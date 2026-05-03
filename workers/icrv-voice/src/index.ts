@@ -17,12 +17,15 @@
 //
 // Audio (RTP/SRTP) NEVER traverses this Worker. Only control + brain.
 
+import { withSentry } from '@sentry/cloudflare';
+import type { ExportedHandler as CFExportedHandler } from '@cloudflare/workers-types';
 import type { BaseEnv, VoiceOutPayload, VoicePostcallPayload, RetryPayload } from '@icrv/shared/types';
 import { uuidv4, nowISO, encryptSecret } from '@icrv/shared/crypto';
 import { isDuplicate, scheduleRetry } from '@icrv/shared/queue-helpers';
 import { loadRcCredentials, loadElCredentials } from '@icrv/shared/credentials';
 import { RingCentralClient } from '@icrv/shared/ring-central-client';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@icrv/shared/rate-limit';
+import { scrubPii } from '@icrv/shared/sentry-scrub';
 
 interface VoiceEnv extends BaseEnv {
   ANTHROPIC_API_KEY:    string;
@@ -38,7 +41,7 @@ interface VoiceEnv extends BaseEnv {
 
 // ─── HTTP (callable + LLM proxy) ───────────────────────────────────────────
 
-export default {
+const handler: ExportedHandler<VoiceEnv, VoiceOutPayload | VoicePostcallPayload | RetryPayload> = {
   async fetch(req: Request, env: VoiceEnv): Promise<Response> {
     const url = new URL(req.url);
 
@@ -115,7 +118,23 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<VoiceEnv, VoiceOutPayload | VoicePostcallPayload | RetryPayload>;
+};
+
+// See icrv-api/src/index.ts for why CFExportedHandler is imported explicitly.
+// The QueueHandlerMessage generic is widened to `unknown` here so the wrapper
+// satisfies Sentry's `ExportedHandler<any>` constraint — `handler` itself is
+// still typed against the precise payload union at its declaration above.
+export default withSentry<CFExportedHandler<VoiceEnv>>(
+  (env) => ({
+    dsn:               env.SENTRY_DSN ?? '',
+    environment:       env.ENVIRONMENT ?? 'production',
+    tracesSampleRate:  0.1,
+    sendDefaultPii:    false,
+    beforeSend:        scrubPii,
+    beforeSendTransaction: scrubPii,
+  }),
+  handler as CFExportedHandler<VoiceEnv>,
+);
 
 // ─── Place call ────────────────────────────────────────────────────────────
 

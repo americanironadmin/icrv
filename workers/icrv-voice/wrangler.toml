@@ -8,6 +8,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 VOICE_LLM_MODEL      = "claude-haiku-4-5-20251001"
 VOICE_LLM_MAX_TOKENS = "512"
+ENVIRONMENT          = "production"
+SENTRY_DSN           = ""   # set via: wrangler secret put SENTRY_DSN --name icrv-voice
 
 [[d1_databases]]
 binding       = "DB"

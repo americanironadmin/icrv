@@ -40,6 +40,11 @@ export interface BaseEnv {
 
   // Secrets — present in every worker that needs envelope encryption
   MASTER_KEK: string;
+
+  // Telemetry (PR 4) — empty string means Sentry stays uninitialised on that
+  // worker; @sentry/cloudflare's withSentry() then becomes a no-op wrapper.
+  SENTRY_DSN?: string;
+  ENVIRONMENT?: string;   // 'production' | 'preview' | 'dev' — falls back to 'production'
 }
 
 // ─── Auth headers injected by icrv-api into service-binding requests ─────────

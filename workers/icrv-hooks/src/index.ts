@@ -19,9 +19,12 @@
 //   POST /u/:token                   one-click unsubscribe POST variant
 
 import { Hono } from 'hono';
+import { withSentry } from '@sentry/cloudflare';
+import type { ExportedHandler as CFExportedHandler } from '@cloudflare/workers-types';
 import type { BaseEnv, InboundEmailPayload, InboundWaPayload, VoicePostcallPayload } from '@icrv/shared/types';
 import { uuidv4, nowISO, hmacSha256Hex, timingSafeEqual, verifyGoogleJwt, fromBase64Url } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
+import { scrubPii } from '@icrv/shared/sentry-scrub';
 
 interface HooksEnv extends BaseEnv {
   WA_APP_SECRET:       string;
@@ -351,4 +354,17 @@ app.onError((err, c) => {
   return c.json({ error: 'internal_error', detail: (err as Error).message }, 500);
 });
 
-export default { fetch: app.fetch } satisfies ExportedHandler<HooksEnv>;
+const handler: ExportedHandler<HooksEnv> = { fetch: app.fetch };
+
+// See icrv-api/src/index.ts for why CFExportedHandler is imported explicitly.
+export default withSentry<CFExportedHandler<HooksEnv>>(
+  (env) => ({
+    dsn:               env.SENTRY_DSN ?? '',
+    environment:       env.ENVIRONMENT ?? 'production',
+    tracesSampleRate:  0.1,
+    sendDefaultPii:    false,
+    beforeSend:        scrubPii,
+    beforeSendTransaction: scrubPii,
+  }),
+  handler as CFExportedHandler<HooksEnv>,
+);

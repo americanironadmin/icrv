@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@icrv/shared": "*",
-    "hono": "^4.6.3"
+    "hono": "^4.6.3",
+    "@sentry/cloudflare": "^8.40.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240924.0",

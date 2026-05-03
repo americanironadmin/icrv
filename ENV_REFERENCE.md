@@ -242,3 +242,33 @@ KV_REVOKED
              /v1/* request. After provisioning, replace
              REPLACE_ME_KV_REVOKED_ID in workers/icrv-api/wrangler.toml
              with the returned namespace id, then `wrangler deploy`.
+
+# ────────────────────────────────────────────────────────────────────
+# Telemetry — Sentry (PR 4)
+# ────────────────────────────────────────────────────────────────────
+# All DSNs are optional. Empty value → SDK stays dormant. Every event passes
+# through scrubPii (packages/shared/src/sentry-scrub.ts on workers,
+# frontend/src/lib/sentry-scrub.ts on Pages) which strips Authorization, Cookie,
+# Cf-Access-Jwt-Assertion, plus PII fields (email, phone, *_e164, name,
+# tenant_id, user_id, address, ip).
+
+SENTRY_DSN
+  Worker(s): icrv-api, icrv-hooks, icrv-voice, icrv-agent
+  Type:      wrangler secret (defined as empty string in [vars])
+  Set with:  wrangler secret put SENTRY_DSN --name icrv-api
+             wrangler secret put SENTRY_DSN --name icrv-hooks
+             wrangler secret put SENTRY_DSN --name icrv-voice
+             wrangler secret put SENTRY_DSN --name icrv-agent
+  Source:    Sentry → Project → Settings → Client Keys (DSN). Reuse the same
+             DSN across workers; events are tagged with `service` = worker name.
+
+ENVIRONMENT
+  Worker(s): icrv-api, icrv-hooks, icrv-voice, icrv-agent
+  Type:      wrangler.toml [vars] (defaults to "production")
+  Values:    production | preview | dev — used as Sentry environment tag.
+
+VITE_SENTRY_DSN
+  Where:     frontend/.env  (Pages env var on production)
+  Source:    Sentry → separate Project for the React app. Optional — empty
+             value disables Sentry entirely on the dashboard.
+  Notes:     Session replay is OFF by default (this app handles PII).

@@ -10,6 +10,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 CF_ACCESS_TEAM_DOMAIN = ""
 CF_ACCESS_AUD         = ""
+ENVIRONMENT           = "production"
+SENTRY_DSN            = ""   # set via: wrangler secret put SENTRY_DSN --name icrv-api
 
 [[d1_databases]]
 binding       = "DB"

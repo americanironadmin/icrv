@@ -8,6 +8,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 GMAIL_PUBSUB_AUD = "https://hooks.icrv.app/hooks/gmail/push"
 HOOKS_DOMAIN     = "hooks.icrv.app"
+ENVIRONMENT      = "production"
+SENTRY_DSN       = ""   # set via: wrangler secret put SENTRY_DSN --name icrv-hooks
 
 [[d1_databases]]
 binding       = "DB"

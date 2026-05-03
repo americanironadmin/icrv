@@ -15,6 +15,8 @@
 // `script_name = "icrv-api"` in their wrangler.toml.
 
 import { Hono } from 'hono';
+import { withSentry } from '@sentry/cloudflare';
+import type { ExportedHandler as CFExportedHandler } from '@cloudflare/workers-types';
 import { authMiddleware, requireNotViewer } from './auth';
 import type { HonoCtx, ApiEnv } from './env';
 import { createContactsRouter }  from './routes/contacts';
@@ -23,6 +25,7 @@ import { createCallsRouter }     from './routes/calls';
 import { createDashboardRouter, createLogsRouter, createAuthRouter, createAdminRouter } from './routes/misc';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
+import { scrubPii } from '@icrv/shared/sentry-scrub';
 
 // Single source of truth for the CORS allowlist. PR 7 will drop the temporary
 // pages.dev origin once app.icrv.app DNS is live.
@@ -301,4 +304,21 @@ app.onError((err, c) => {
   return c.json({ error: 'internal_error', detail: (err as Error).message }, 500);
 });
 
-export default { fetch: app.fetch } satisfies ExportedHandler<ApiEnv>;
+const handler: ExportedHandler<ApiEnv> = { fetch: app.fetch };
+
+// `CFExportedHandler` is the same shape as the global `ExportedHandler`, but
+// importing it explicitly from `@cloudflare/workers-types` aligns the type
+// reference TypeScript sees here with the one Sentry's d.ts imports — without
+// this they're "the same" name but considered structurally different through
+// the lib/global path, which fails the `extends ExportedHandler<any>` check.
+export default withSentry<CFExportedHandler<ApiEnv>>(
+  (env) => ({
+    dsn:               env.SENTRY_DSN ?? '',
+    environment:       env.ENVIRONMENT ?? 'production',
+    tracesSampleRate:  0.1,
+    sendDefaultPii:    false,
+    beforeSend:        scrubPii,
+    beforeSendTransaction: scrubPii,
+  }),
+  handler as CFExportedHandler<ApiEnv>,
+);
