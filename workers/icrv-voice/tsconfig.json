@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022", "WebWorker"],
+    "module": "ESNext", "moduleResolution": "Bundler",
+    "types": ["@cloudflare/workers-types"],
+    "strict": true, "noEmit": true, "esModuleInterop": true,
+    "skipLibCheck": true, "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": { "@icrv/shared/*": ["../../packages/shared/src/*"] }
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,96 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - 'packages/**'
+      - 'schema.sql'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      worker:
+        description: 'Specific worker to deploy (or "all")'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - icrv-api
+          - icrv-hooks
+          - icrv-email
+          - icrv-whatsapp
+          - icrv-voice
+          - icrv-consumer
+          - icrv-agent
+          - icrv-cron
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  typecheck:
+    name: Typecheck workspaces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  deploy:
+    name: Deploy ${{ matrix.worker }}
+    needs: typecheck
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.inputs.worker == 'all' || github.event.inputs.worker == matrix.worker
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        worker:
+          - icrv-api
+          - icrv-hooks
+          - icrv-email
+          - icrv-whatsapp
+          - icrv-voice
+          - icrv-consumer
+          - icrv-agent
+          - icrv-cron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Deploy ${{ matrix.worker }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/${{ matrix.worker }}
+          command: deploy
+
+  schema-migrate:
+    name: Apply schema migrations
+    needs: typecheck
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.event.head_commit.modified, 'schema.sql')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Apply schema to D1
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute icrv-db --remote --file=./schema.sql

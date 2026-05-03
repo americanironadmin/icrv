@@ -1,0 +1,103 @@
+## workers/icrv-whatsapp/wrangler.toml
+account_id = "1c07214c662a877a6d09d597d5f4a461"
+name = "icrv-whatsapp"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding       = "DB"
+database_name = "icrv-db"
+database_id = "fdf24661-6675-4570-b1b7-f2b672cad4bf"
+
+[[kv_namespaces]]
+binding = "KV_CONFIG"
+id      = "ab921928cea14fbe9756f9a67ae3c1d3"
+[[kv_namespaces]]
+binding = "KV_OAUTH"
+id      = "5e605b3a83994ee5b78b084d6b561d0b"
+[[kv_namespaces]]
+binding = "KV_RATE"
+id      = "daf3f5efc06346a1a383150ab1de37da"
+[[kv_namespaces]]
+binding = "KV_IDEMP"
+id      = "878fe6fdfa844b9d96df8017ac39ee63"
+[[kv_namespaces]]
+binding = "KV_TRACK"
+id      = "7926181a73194dd2a2e14307cb7d4a27"
+
+[[r2_buckets]]
+binding     = "R2_MEDIA"
+bucket_name = "icrv-media"
+[[r2_buckets]]
+binding     = "R2_UPLOADS"
+bucket_name = "icrv-uploads"
+[[r2_buckets]]
+binding     = "R2_EXPORTS"
+bucket_name = "icrv-exports"
+[[r2_buckets]]
+binding     = "R2_TRANSCRIPTS"
+bucket_name = "icrv-transcripts"
+[[r2_buckets]]
+binding     = "R2_EVIDENCE"
+bucket_name = "icrv-evidence"
+
+[[queues.consumers]]
+queue          = "icrv-wa-out"
+max_batch_size = 10
+max_retries    = 3
+dead_letter_queue = "icrv-dlq"
+[[queues.consumers]]
+queue          = "icrv-wa-in"
+max_batch_size = 10
+max_retries    = 3
+dead_letter_queue = "icrv-dlq"
+
+[[queues.producers]]
+queue   = "icrv-wa-out"
+binding = "Q_WA_OUT"
+[[queues.producers]]
+queue   = "icrv-wa-in"
+binding = "Q_WA_IN"
+[[queues.producers]]
+queue   = "icrv-agent-jobs"
+binding = "Q_AGENT"
+[[queues.producers]]
+queue   = "icrv-retry"
+binding = "Q_RETRY"
+[[queues.producers]]
+queue   = "icrv-dlq"
+binding = "Q_DLQ"
+[[queues.producers]]
+queue   = "icrv-email-out"
+binding = "Q_EMAIL_OUT"
+[[queues.producers]]
+queue   = "icrv-email-in"
+binding = "Q_EMAIL_IN"
+[[queues.producers]]
+queue   = "icrv-voice-postcall"
+binding = "Q_VOICE_POSTCALL"
+
+[[durable_objects.bindings]]
+name        = "VOICE_SESSION_DO"
+class_name  = "VoiceSessionDO"
+script_name = "icrv-api"
+[[durable_objects.bindings]]
+name        = "CAMPAIGN_DO"
+class_name  = "CampaignCoordinatorDO"
+script_name = "icrv-api"
+[[durable_objects.bindings]]
+name        = "CONTACT_INBOX_DO"
+class_name  = "ContactInboxDO"
+script_name = "icrv-api"
+[[durable_objects.bindings]]
+name        = "OAUTH_DO"
+class_name  = "OAuthRotatorDO"
+script_name = "icrv-api"
+[[durable_objects.bindings]]
+name        = "AGENT_SESSION_DO"
+class_name  = "AgentSessionDO"
+script_name = "icrv-agent"
+
+# Secrets:
+#   wrangler secret put MASTER_KEK --name icrv-whatsapp

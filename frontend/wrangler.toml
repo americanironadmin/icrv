@@ -1,0 +1,8 @@
+name = "icrv-dashboard"
+compatibility_date = "2024-09-23"
+
+pages_build_output_dir = "dist"
+
+[vars]
+VITE_API_BASE_URL = "https://icrv-api.americanironadmin.workers.dev"
+VITE_APP_NAME = "IRON CUSTOMER REACH VMAX"

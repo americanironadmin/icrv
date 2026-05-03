@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@icrv/shared/*": ["../../packages/shared/src/*"] }
+  },
+  "include": ["src/**/*.ts", "../icrv-voice/src/**/*.ts"]
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+.wrangler
+*.timestamp-*.mjs
+*.bak
+_write_probe.txt
+ICRV-Production-Audit.md
+CC-PROMPT-icrv-hardening.md
+HARDENING_REPORT.md

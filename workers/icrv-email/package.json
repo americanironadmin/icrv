@@ -1,0 +1,9 @@
+{
+  "name": "@icrv/email",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "deploy": "wrangler deploy", "dev": "wrangler dev", "typecheck": "tsc --noEmit" },
+  "dependencies": { "@icrv/shared": "*" },
+  "devDependencies": { "@cloudflare/workers-types": "^4.20240924.0", "typescript": "^5.6.3", "wrangler": "^3.80.0" }
+}

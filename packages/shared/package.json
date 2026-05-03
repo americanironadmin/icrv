@@ -1,0 +1,18 @@
+{
+  "name": "@icrv/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    "./types": "./src/types.ts",
+    "./crypto": "./src/crypto.ts",
+    "./queue-helpers": "./src/queue-helpers.ts",
+    "./credentials": "./src/credentials.ts",
+    "./ring-central-client": "./src/ring-central-client.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240924.0",
+    "typescript": "^5.6.3"
+  }
+}
