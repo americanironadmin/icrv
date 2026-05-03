@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react'
 import { dashboardApi, type ApiStatus } from '@/api/dashboard'
 import { useApp, isAgentActive } from '@/context/AppContext'
+import { post } from '@/api/client'
 
 const SERVICE_LABELS: Record<string, string> = {
   gmail: 'Gmail',
@@ -43,12 +44,21 @@ export default function Header() {
     return () => clearInterval(id)
   }, [])
 
-  const logout = () => {
-    sessionStorage.clear()
-    // Cloudflare Access logout endpoint
-    const team = import.meta.env.VITE_CF_ACCESS_TEAM ?? ''
+  // PR 6: server-side revoke + Access cookie wipe. The /v1/auth/logout response
+  // carries the team-scoped logout URL so we don't have to assemble it here.
+  // Fallbacks cover the case where the server hasn't been redeployed yet or
+  // CF_ACCESS_TEAM_DOMAIN isn't set in either layer.
+  const logout = async () => {
+    try {
+      const data = await post<{ ok: boolean; logout_url: string | null }>('/v1/auth/logout')
+      if (data.logout_url) { window.location.href = data.logout_url; return }
+    } catch {
+      // Fall through to the legacy env-derived URL.
+    }
+    const team = (import.meta.env.VITE_CF_ACCESS_TEAM_DOMAIN as string | undefined)
+              ?? (import.meta.env.VITE_CF_ACCESS_TEAM as string | undefined)
     window.location.href = team
-      ? `https://${team}.cloudflareaccess.com/cdn-cgi/access/logout`
+      ? `https://${team.includes('.') ? team : `${team}.cloudflareaccess.com`}/cdn-cgi/access/logout`
       : '/'
   }
 

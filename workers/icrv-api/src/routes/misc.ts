@@ -266,10 +266,9 @@ export function createAuthRouter(): Hono<HonoCtx> {
     return c.json({ connected: true, email: row.email, oauth_token_id: row.id, connected_at: row.created_at });
   });
 
-  // ── Logout — revoke this JWT's JTI in KV_REVOKED ──────────────────────────
-  // PR 6 will add `logout_url` so the frontend can finish the Cloudflare Access
-  // session by redirecting to /cdn-cgi/access/logout. This PR ships the
-  // revocation half so leaked tokens stop working immediately.
+  // ── Logout — revoke this JWT's JTI in KV_REVOKED + return Access logout URL
+  // The frontend POSTs here, then navigates to `logout_url` so Cloudflare Access
+  // wipes its own session cookie too.
   app.post('/logout', async (c) => {
     const jti = c.get('jwt_jti');
     const exp = c.get('jwt_exp');
@@ -277,10 +276,14 @@ export function createAuthRouter(): Hono<HonoCtx> {
       const ttl = exp ? Math.max(60, exp - Math.floor(Date.now() / 1000)) : 86400;
       await c.env.KV_REVOKED.put(`revoked:${jti}`, '1', { expirationTtl: ttl });
     }
-    return new Response(null, {
-      status: 204,
-      headers: { 'Clear-Site-Data': '"cookies"' },
-    });
+    const logoutUrl = c.env.CF_ACCESS_TEAM_DOMAIN
+      ? `https://${c.env.CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/logout`
+      : null;
+    return c.json(
+      { ok: true, logout_url: logoutUrl },
+      200,
+      { 'Clear-Site-Data': '"cookies"' },
+    );
   });
 
   return app;

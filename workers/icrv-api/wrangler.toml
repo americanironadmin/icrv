@@ -39,6 +39,12 @@ id      = "7926181a73194dd2a2e14307cb7d4a27"
 [[kv_namespaces]]
 binding = "KV_REVOKED"
 id      = "REPLACE_ME_KV_REVOKED_ID"
+# KV_JWKS — caches the Cloudflare Access JWKS bundle so authMiddleware doesn't
+# fetch /cdn-cgi/access/certs on every request. 1-hour TTL. Provision with:
+#   wrangler kv namespace create KV_JWKS
+[[kv_namespaces]]
+binding = "KV_JWKS"
+id      = "REPLACE_ME_KV_JWKS_ID"
 
 [[r2_buckets]]
 binding     = "R2_MEDIA"

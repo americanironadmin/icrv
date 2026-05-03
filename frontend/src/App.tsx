@@ -1,16 +1,17 @@
 // src/App.tsx
-// Root application: router, layout shell, all routes
+// Root application: router, layout shell, all routes.
 //
-// Auth flow:
-//   1. On mount AuthGate checks (in order):
-//        a. ?token= in URL  → store in sessionStorage, strip from URL
-//        b. existing sessionStorage 'icrv_token'
-//        c. CF Access cookie (sent automatically as withCredentials)
-//   2. It calls GET /v1/auth/me with whatever auth it has.
-//        - 200 → setUser, render the app
-//        - 401 → render the SignIn screen (no redirect loop)
-//   3. If client.ts later sees a 401, it dispatches 'icrv:unauthorized';
-//      AuthGate listens and flips back to the SignIn screen.
+// Auth model (post PR 6 — Cloudflare Access cutover):
+//   1. The browser carries a CF_Authorization cookie set by Cloudflare Access.
+//      AuthGate makes one credentials:'include' request to /v1/auth/me.
+//        - 200 → setUser, render the app.
+//        - 401 → render the "Sign in via Cloudflare Access" panel; the only
+//                CTA navigates to the Access login URL with redirect_url back
+//                to the current page.
+//   2. There is no Bearer textarea, no ?token= URL ingestion, no
+//      sessionStorage.icrv_token. If api/client.ts later sees a 401 (e.g.
+//      cookie expired in another tab) it dispatches 'icrv:unauthorized' and
+//      the gate flips back to the sign-in panel.
 
 import React, { useEffect, useState, useCallback } from 'react'
 import { Routes, Route } from 'react-router-dom'
@@ -30,42 +31,25 @@ import NotFound       from './pages/NotFound'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.icrv.app'
+const ACCESS_TEAM_DOMAIN = (import.meta.env.VITE_CF_ACCESS_TEAM_DOMAIN as string | undefined) ?? ''
+const ACCESS_AUD         = (import.meta.env.VITE_CF_ACCESS_AUD as string | undefined) ?? ''
 
 type GateState = 'checking' | 'authed' | 'signin'
 
-// ── Sign-in screen ────────────────────────────────────────────────────────────
-// Minimal UI for pasting an admin JWT. The token is stored in sessionStorage
-// and validated against /v1/auth/me. On success the gate flips to 'authed'.
+function buildAccessLoginUrl(): string {
+  if (!ACCESS_TEAM_DOMAIN) return '/'
+  const base = `https://${ACCESS_TEAM_DOMAIN}/cdn-cgi/access/login`
+  const path = ACCESS_AUD ? `${base}/${ACCESS_AUD}` : base
+  const back = encodeURIComponent(window.location.href)
+  return `${path}?redirect_url=${back}`
+}
 
-function SignIn({ onAuthed }: { onAuthed: (user: any) => void }) {
-  const [token, setToken]     = useState('')
-  const [busy, setBusy]       = useState(false)
-  const [error, setError]     = useState<string | null>(null)
+// ── Sign-in panel ────────────────────────────────────────────────────────────
+// No textarea, no token paste. The only path forward is the Cloudflare Access
+// login flow, after which the browser comes back here with CF_Authorization set.
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!token.trim()) return
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await fetch(`${API_BASE}/v1/auth/me`, {
-        credentials: 'include',
-        headers: { Authorization: `Bearer ${token.trim()}` },
-      })
-      if (!res.ok) {
-        setError(`Token rejected (HTTP ${res.status}).`)
-        setBusy(false)
-        return
-      }
-      const data = await res.json()
-      sessionStorage.setItem('icrv_token', token.trim())
-      onAuthed(data.user)
-    } catch (err: any) {
-      setError(err?.message || 'Network error')
-      setBusy(false)
-    }
-  }
-
+function AccessSignIn() {
+  const loginUrl = buildAccessLoginUrl()
   return (
     <div style={{
       minHeight: '100vh',
@@ -77,78 +61,42 @@ function SignIn({ onAuthed }: { onAuthed: (user: any) => void }) {
       color: 'var(--icrv-fg, #f0f0f0)',
       fontFamily: '"Space Mono", monospace',
     }}>
-      <form onSubmit={submit} style={{
+      <div style={{
         width: '100%',
-        maxWidth: 480,
+        maxWidth: 440,
         padding: 28,
         border: '1px solid #333',
         borderRadius: 6,
         background: '#111',
+        textAlign: 'center',
       }}>
-        <h1 style={{ fontSize: 18, marginBottom: 8, letterSpacing: 1 }}>
+        <h1 style={{ fontSize: 18, marginBottom: 12, letterSpacing: 1 }}>
           IRON CUSTOMER REACH VMAX
         </h1>
-        <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 20 }}>
-          Sign in with your admin JWT to continue.
+        <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 24 }}>
+          Sign in with your organization account to continue.
         </p>
-
-        <label htmlFor="icrv-token" style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>
-          Bearer JWT
-        </label>
-        <textarea
-          id="icrv-token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-          rows={5}
-          autoFocus
+        <a
+          href={loginUrl}
           style={{
-            width: '100%',
-            padding: 10,
-            fontFamily: 'inherit',
-            fontSize: 12,
-            background: '#000',
-            color: '#0f0',
-            border: '1px solid #333',
-            borderRadius: 4,
-            resize: 'vertical',
-          }}
-        />
-
-        {error && (
-          <div role="alert" style={{
-            marginTop: 12,
-            padding: 10,
-            border: '1px solid #c33',
-            background: '#2a0a0a',
-            color: '#f88',
-            fontSize: 12,
-            borderRadius: 4,
-          }}>
-            {error}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={busy || !token.trim()}
-          style={{
-            marginTop: 16,
-            width: '100%',
-            padding: 12,
-            background: busy ? '#444' : '#f60',
+            display: 'inline-block',
+            padding: '12px 28px',
+            background: '#f60',
             color: '#000',
-            fontFamily: 'inherit',
+            textDecoration: 'none',
             fontWeight: 700,
-            border: 0,
-            borderRadius: 4,
-            cursor: busy ? 'wait' : 'pointer',
             letterSpacing: 1,
+            borderRadius: 4,
           }}
         >
-          {busy ? 'VALIDATING…' : 'SIGN IN'}
-        </button>
-      </form>
+          SIGN IN
+        </a>
+        {!ACCESS_TEAM_DOMAIN && (
+          <p style={{ marginTop: 18, fontSize: 11, color: '#f88' }}>
+            VITE_CF_ACCESS_TEAM_DOMAIN is not configured — see ENV_REFERENCE.md.
+          </p>
+        )}
+      </div>
     </div>
   )
 }
@@ -162,42 +110,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const tryHydrate = useCallback(async () => {
     setState('checking')
     try {
-      // 1. Pull ?token= out of the URL if present and stash it.
-      const urlParams = new URLSearchParams(window.location.search)
-      const urlToken  = urlParams.get('token')
-      if (urlToken) {
-        sessionStorage.setItem('icrv_token', urlToken)
-        const cleanUrl = window.location.pathname + window.location.hash
-        window.history.replaceState({}, '', cleanUrl)
-      }
-
-      const stored = sessionStorage.getItem('icrv_token')
-      const headers: Record<string, string> = {}
-      if (stored) headers['Authorization'] = `Bearer ${stored}`
-
-      const res = await fetch(`${API_BASE}/v1/auth/me`, {
-        credentials: 'include',
-        headers,
-      })
-
+      const res = await fetch(`${API_BASE}/v1/auth/me`, { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
         setUser(data.user)
         setState('authed')
       } else {
-        // 401 or anything else → require sign-in
-        sessionStorage.removeItem('icrv_token')
-        sessionStorage.removeItem('icrv_user')
         setUser(null)
         setState('signin')
       }
     } catch {
-      // Network failure → still surface the sign-in screen rather than spin
+      // Network failure — show the sign-in panel rather than spin.
       setState('signin')
     }
   }, [setUser])
 
-  // Initial hydration on mount.
   useEffect(() => {
     if (user) { setState('authed'); return }
     tryHydrate()
@@ -231,14 +158,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (state === 'signin') {
-    return (
-      <SignIn onAuthed={(u) => {
-        setUser(u)
-        setState('authed')
-      }} />
-    )
-  }
+  if (state === 'signin') return <AccessSignIn />
 
   return <>{children}</>
 }

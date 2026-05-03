@@ -6,3 +6,10 @@ pages_build_output_dir = "dist"
 [vars]
 VITE_API_BASE_URL = "https://icrv-api.americanironadmin.workers.dev"
 VITE_APP_NAME = "IRON CUSTOMER REACH VMAX"
+# PR 6 — Cloudflare Access. Set these in the Pages project once Access is
+# configured (Cloudflare dashboard → Pages → icrv-dashboard → Settings → Env vars):
+#   VITE_CF_ACCESS_TEAM_DOMAIN = acme.cloudflareaccess.com
+#   VITE_CF_ACCESS_AUD         = <Application AUD tag>
+# Until then the SignIn panel will show a "team domain not configured" notice.
+VITE_CF_ACCESS_TEAM_DOMAIN = ""
+VITE_CF_ACCESS_AUD         = ""

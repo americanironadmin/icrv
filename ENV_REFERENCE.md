@@ -272,3 +272,70 @@ VITE_SENTRY_DSN
   Source:    Sentry → separate Project for the React app. Optional — empty
              value disables Sentry entirely on the dashboard.
   Notes:     Session replay is OFF by default (this app handles PII).
+
+# ────────────────────────────────────────────────────────────────────
+# Cloudflare Access cutover (PR 6)
+# ────────────────────────────────────────────────────────────────────
+
+CF_ACCESS_TEAM_DOMAIN
+  Worker(s): icrv-api
+  Type:      wrangler.toml [vars]  (set to your Access team domain)
+  Format:    "<team>.cloudflareaccess.com"
+  Purpose:   Used by verifyCfAccess to fetch JWKS and issued in /v1/auth/logout
+             as the logout_url base.
+
+CF_ACCESS_AUD
+  Worker(s): icrv-api
+  Type:      wrangler.toml [vars]
+  Format:    Application AUD tag from Cloudflare Access (Application → Overview)
+  Purpose:   verifyCfAccess only accepts JWTs whose `aud` claim contains this.
+
+KV_JWKS
+  Worker(s): icrv-api
+  Type:      KV namespace
+  Provision: wrangler kv namespace create KV_JWKS
+  Purpose:   1-hour cache of /cdn-cgi/access/certs JWKS bundle. Without this,
+             every authenticated request fans out a sub-request to Cloudflare
+             Access to fetch the public keys.
+
+VITE_CF_ACCESS_TEAM_DOMAIN
+  Where:     frontend/wrangler.toml [vars]
+  Format:    Same as CF_ACCESS_TEAM_DOMAIN above
+  Purpose:   The SignIn panel composes the Access login URL from this. Empty =>
+             the panel renders a "team domain not configured" notice.
+
+VITE_CF_ACCESS_AUD
+  Where:     frontend/wrangler.toml [vars]
+  Format:    Application AUD tag
+  Purpose:   Embedded in the login URL so Access knows which application policy
+             to evaluate.
+
+# ────────────────────────────────────────────────────────────────────
+# Provisioning sequence (one-time)
+# ────────────────────────────────────────────────────────────────────
+# 1. Cloudflare dashboard → Zero Trust → Access → Applications → Add:
+#    type Self-Hosted, hosts:
+#       app.icrv.app
+#       icrv-api.americanironadmin.workers.dev      (until api.icrv.app DNS exists)
+#       api.icrv.app                                (after PR 7 cutover)
+# 2. Identity provider: pick one (Google Workspace / Microsoft / Okta) and
+#    bind to the application. Configure a "ICRV Operators" policy with the
+#    list of allowed emails or group identifiers.
+# 3. Copy the Application AUD tag from the application's Overview tab.
+# 4. Provision KV namespaces and apply CF_ACCESS_* vars:
+#       wrangler kv namespace create KV_JWKS
+#       wrangler kv namespace create KV_REVOKED
+#       (paste both ids into workers/icrv-api/wrangler.toml)
+#    Then in workers/icrv-api/wrangler.toml [vars]:
+#       CF_ACCESS_TEAM_DOMAIN = "<team>.cloudflareaccess.com"
+#       CF_ACCESS_AUD         = "<aud-tag>"
+# 5. Pages env vars (Pages → icrv-dashboard → Settings → Env vars, Production):
+#       VITE_CF_ACCESS_TEAM_DOMAIN = same as above
+#       VITE_CF_ACCESS_AUD         = same as above
+# 6. Provision allowed users in D1:
+#       INSERT INTO users (id, tenant_id, email, role, status)
+#       VALUES (uuid, '<tenant>', 'lower@example.com', 'admin', 'active');
+#    Cloudflare Access only checks "email allowed in"; the worker's
+#    resolveUser() then maps that email to a role/tenant. Missing rows yield
+#    HTTP 403 user_not_provisioned, which the SignIn panel surfaces.
+# 7. Deploy & smoke-test (see PR 6 description for the exact curl recipe).

@@ -4,6 +4,8 @@ import type { BaseEnv } from '@icrv/shared/types';
 export interface ApiEnv extends BaseEnv {
   // JTI revocation list (populated by /v1/auth/logout, checked by authMiddleware).
   KV_REVOKED: KVNamespace;
+  // Cloudflare Access JWKS cache (1-hour TTL) — avoids a fetch per request.
+  KV_JWKS:    KVNamespace;
 
   // Service bindings to other workers
   AGENT: Fetcher;   // icrv-agent (AI agent control plane)

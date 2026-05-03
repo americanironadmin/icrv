@@ -53,10 +53,9 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null)
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUserState] = useState<User | null>(() => {
-    const stored = sessionStorage.getItem('icrv_user')
-    return stored ? (JSON.parse(stored) as User) : null
-  })
+  // PR 6: user state is in-memory only. AuthGate hydrates it from
+  // /v1/auth/me on every page load — sessionStorage is no longer touched.
+  const [user, setUserState] = useState<User | null>(null)
 
   const [agentControls, setAgentControls] = useState<AgentControlsResponse | null>(null)
   const [agentLoading, setAgentLoading]   = useState(false)
@@ -64,8 +63,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const setUser = useCallback((u: User | null) => {
     setUserState(u)
-    if (u) sessionStorage.setItem('icrv_user', JSON.stringify(u))
-    else   sessionStorage.removeItem('icrv_user')
   }, [])
 
   const refreshAgentControls = useCallback(async () => {

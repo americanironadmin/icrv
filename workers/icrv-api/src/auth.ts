@@ -44,16 +44,36 @@ async function verifyHs256(token: string, secret: string): Promise<JwtPayload> {
   return payload;
 }
 
+// JWKS bundle is fetched from /cdn-cgi/access/certs and cached in KV_JWKS for
+// 1 hour. Without the cache, every authed request makes a sub-request to
+// Cloudflare's edge for the keyset — fine for small traffic, expensive at scale.
+async function getCfAccessJwks(env: ApiEnv): Promise<{ keys: Array<JsonWebKey & { kid: string }> }> {
+  const cacheKey = `jwks:${env.CF_ACCESS_TEAM_DOMAIN}`;
+  if (env.KV_JWKS) {
+    const cached = await env.KV_JWKS.get(cacheKey);
+    if (cached) {
+      try { return JSON.parse(cached) as { keys: Array<JsonWebKey & { kid: string }> }; }
+      catch { /* fall through to refetch */ }
+    }
+  }
+  const jwksRes = await fetch(`https://${env.CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`);
+  if (!jwksRes.ok) throw new Error('cf_jwks_fetch_failed');
+  const jwks = await jwksRes.json() as { keys: Array<JsonWebKey & { kid: string }> };
+  if (env.KV_JWKS) {
+    // Best-effort: a parallel request might also write — last write wins, fine.
+    await env.KV_JWKS.put(cacheKey, JSON.stringify(jwks), { expirationTtl: 3600 });
+  }
+  return jwks;
+}
+
 // Cloudflare Access JWT verification — JWKS at /cdn-cgi/access/certs
-async function verifyCfAccess(token: string, teamDomain: string, audTag: string): Promise<JwtPayload> {
+async function verifyCfAccess(token: string, env: ApiEnv): Promise<JwtPayload> {
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('cf_jwt_malformed');
   const headerB64 = parts[0], payloadB64 = parts[1], sigB64 = parts[2];
   const header = JSON.parse(new TextDecoder().decode(fromBase64Url(headerB64))) as { kid: string; alg: string };
 
-  const jwksRes = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`);
-  if (!jwksRes.ok) throw new Error('cf_jwks_fetch_failed');
-  const jwks = await jwksRes.json() as { keys: Array<JsonWebKey & { kid: string }> };
+  const jwks = await getCfAccessJwks(env);
 
   const key = jwks.keys.find(k => k.kid === header.kid);
   if (!key) throw new Error('cf_jwks_kid_not_found');
@@ -74,9 +94,19 @@ async function verifyCfAccess(token: string, teamDomain: string, audTag: string)
   const now = Math.floor(Date.now() / 1000);
   if (payload.exp < now) throw new Error('cf_jwt_expired');
   const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!auds.includes(audTag)) throw new Error('cf_jwt_aud_mismatch');
+  if (!auds.includes(env.CF_ACCESS_AUD)) throw new Error('cf_jwt_aud_mismatch');
   return payload;
 }
+
+// Set of origins that should arrive via the Cloudflare Access cookie path.
+// A Bearer presented from one of these is a sign that legacy paste-the-JWT
+// behaviour is still alive in some browser tab — reject so it can't slip past
+// the cutover.
+const BROWSER_ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
+  'https://app.icrv.app',
+  'http://localhost:5173',
+  'https://icrv-dashboard.pages.dev',
+]);
 
 // Resolve identity → DB lookup of users row → tenant + role
 async function resolveUser(env: ApiEnv, email: string): Promise<{ user_id: string; tenant_id: string; role: 'admin'|'operator'|'viewer' }> {
@@ -94,15 +124,23 @@ export async function authMiddleware(c: Context<HonoCtx>, next: () => Promise<vo
   const cfCookie = /(?:^|;\s*)CF_Authorization=([^;]+)/.exec(cookieHeader)?.[1];
   const cfToken = cfHeader ?? cfCookie;
 
-  // 2) Internal Bearer
+  // 2) Internal Bearer (service-to-service only after PR 6)
   const authHeader = c.req.header('Authorization') ?? '';
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  // PR 6 cutover guard — refuse Bearer tokens presented from a browser context.
+  // Browsers that hit /v1/* MUST come through Cloudflare Access cookie. Service
+  // calls do not set Origin, so they continue to work.
+  const origin = c.req.header('Origin') ?? '';
+  if (bearer && origin && BROWSER_ALLOWED_ORIGINS.has(origin)) {
+    return c.json({ error: 'browser_bearer_disallowed' }, 400);
+  }
 
   let payload: JwtPayload | null = null;
 
   if (cfToken && c.env.CF_ACCESS_TEAM_DOMAIN && c.env.CF_ACCESS_AUD) {
     try {
-      payload = await verifyCfAccess(cfToken, c.env.CF_ACCESS_TEAM_DOMAIN, c.env.CF_ACCESS_AUD);
+      payload = await verifyCfAccess(cfToken, c.env);
     } catch (err) {
       // fall through to bearer
     }
