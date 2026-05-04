@@ -18,7 +18,7 @@ DSNs, secret config) so they can be done in one sitting.
 |----|-----|------|----|-----------|-------------|
 | C1 | Critical | Auth | PR 6 | `frontend/src/App.tsx` — SignIn textarea deleted, AccessSignIn panel only links to `/cdn-cgi/access/login/<AUD>` | `grep "Bearer JWT" frontend/src` returns nothing; browser flow forces Access login |
 | C2 | Critical | Auth | PR 6 | `frontend/src/App.tsx` — `?token=` URL ingestion removed; `frontend/src/api/client.ts` — sessionStorage interceptor removed | Bundle has 0 occurrences of `icrv_token` |
-| C3 | Critical | Auth | PR 2 (CSP) + PR 6 (cookie cutover) | CSP Report-Only on `_headers` + Access cookie path only | `curl -sI <pages>/contacts \| grep content-security-policy` |
+| C3 | Critical | Auth | PR 2 (CSP) + PR 6 (cookie cutover) + `polish/csp-enforce-flip` | CSP **enforcing** on `_headers` (flipped 2026-05-04 after zero-violation Playwright walk) + Access cookie path only | `curl -sI <pages-hash>.icrv-dashboard.pages.dev/ \| grep -i "^content-security-policy:"` (custom domain returns 401 to anonymous curl since Access protects the bare host) |
 | C4 | Critical | Headers | PR 1, PR 2 | `frontend/public/_headers` — HSTS, X-Frame-Options DENY, Permissions-Policy, COOP, X-Content-Type-Options, Referrer-Policy, CSP | `curl -sI <pages>/contacts \| grep -iE "strict-transport\|x-frame\|permissions-policy\|cross-origin-opener\|content-security-policy"` |
 | C5 | Critical | API | PR 3 | `packages/shared/src/rate-limit.ts` + `workers/icrv-api/src/index.ts` — 10/60s on `/v1/auth/*`, 120/60s on `/v1/*` | 25× burst returns 401s then 429s |
 | C6 | Critical | Auth | PR 3 + PR 6 | `KV_REVOKED` + `/v1/auth/logout` + `authMiddleware` JTI check | Logout → JTI persisted → next request 401 token_revoked |
@@ -198,23 +198,7 @@ should be filed as separate tickets.
    should ship with the a11y fixes when `npm run audit:a11y` is run for the
    first time.
 
-4. **CSP enforcing-mode flip (PR 2 / Phase D follow-up)** — the policy is live
-   as `Content-Security-Policy-Report-Only`. To flip to enforcing:
-   1. Open `https://icrv.americanironus.com` in a browser, complete Access
-      login, walk every sidebar route (`/`, `/contacts`, `/campaigns`, `/ai`,
-      `/logs`, `/calls`, `/settings`) plus modals: new contact, edit contact,
-      bulk upload (cancel), AI control panel kill-switch dialog, run reject
-      dialog, contact-delete confirm dialog.
-   2. Watch the worker tail in a second terminal:
-      `wrangler tail --name icrv-api --format pretty | grep -i csp-report`
-   3. If both DevTools Console AND `wrangler tail` are clean of CSP violations,
-      push a one-line follow-up commit on `main`:
-      ```
-      sed -i '' 's/Content-Security-Policy-Report-Only:/Content-Security-Policy:/' frontend/public/_headers
-      git commit -am "feat(security): flip CSP from Report-Only to enforcing"
-      git push origin main
-      cd frontend && npm run build && wrangler pages deploy dist --project-name icrv-dashboard --branch main
-      ```
+4. ~~**CSP enforcing-mode flip (PR 2 / Phase D follow-up)**~~ **(closed 2026-05-04, PR `polish/csp-enforce-flip`)** — flipped via autonomous Playwright walk against the unique-hash Pages preview URL `<hash>.icrv-dashboard.pages.dev` (which serves the same `_headers`/CSP as production but isn't covered by Access's exact-hostname destination match). Walk script committed at `frontend/scripts/csp-walk.spec.ts` is re-runnable for future audits via `PLAYWRIGHT_TEST_BASE_URL=<preview-url> npx playwright test` from `frontend/`. Note: the original recipe assumed `wrangler tail | grep csp-report` would catch worker-side reports, but `/csp-report` now sits behind Access (after the cutover-time destination consolidation), so worker-tail capture is no-op for browser-initiated CSP reports — the browser-side `page.on('request')` capture in the spec is the authoritative channel.
 
 5. **Sentry session replay** — currently disabled by default. If you decide
    replay is acceptable after a privacy review, flip the
@@ -419,6 +403,17 @@ access-control-allow-credentials: true
 ```
 
 - `03:53Z` axe-core a11y check **could not run end-to-end** — two reasons: (a) bundled `chromedriver 148` versus locally installed Chrome 136 (`session not created`), and (b) Access intercepts the page before axe-headless can render, so even with a matching ChromeDriver the tool would only see the Access login screen. Deferred to a manual local pass with a logged-in browser. Backlog item recorded.
+
+### 2026-05-04 — Polish: CSP enforcing flip (Backlog #4 closed)
+
+- `13:30Z` Service-token walk attempt blocked: the ICRV Access Application has been migrated to the new OAuth 2.0 Protected Resource mode (`www-authenticate: Bearer realm="OAuth"`, `authentication_methods: [cloudflared, oauth]`). Legacy `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers no longer authenticate. Switched approach to walking the unique-hash Pages preview URL, which serves the same `_headers` but isn't covered by Access's exact-hostname destination match.
+- `13:30Z` Playwright walk against `https://36a4f502.icrv-dashboard.pages.dev` (current `main` deployment, still Report-Only): zero real violations across `/`, `/contacts`, `/campaigns`, `/ai`, `/logs`, `/calls`, `/settings` + Contacts modals (`+ New Contact`, `⇑ Bulk CSV`). `/v1/auth/me` mocked in-spec so AuthGate flips authed and routes render. Seven advisories observed (`'upgrade-insecure-requests' is ignored when delivered in a report-only policy`) are browser informationals that disappear post-flip — filtered out of the violation set.
+- `13:46Z` `frontend/public/_headers` flipped to enforcing via `sed`. Substitution verified: `Content-Security-Policy-Report-Only` count = 0; `^  Content-Security-Policy:` count = 1.
+- `13:48Z` Production redeploy: `wrangler pages deploy dist --project-name icrv-dashboard --branch main`. New deployment URL `https://f40eefbb.icrv-dashboard.pages.dev`.
+- `13:49Z` Header on the new deploy verified by `curl -sI`: `content-security-policy: default-src 'self'; ...` (no `-Report-Only` suffix).
+- `13:50Z` Confirmation walk against the new ENFORCING deployment: zero blocks across the same 7 routes + Contacts modals, proving the policy doesn't break anything under enforcement.
+- `13:51Z` `bash scripts/audit-check.sh https://f40eefbb.icrv-dashboard.pages.dev https://icrv-api.americanironus.com` — security headers section emits the expected enforcing CSP, HSTS, COOP, Permissions-Policy, X-Frame-Options DENY, X-Content-Type-Options. (Custom domain `icrv.americanironus.com` cannot be audited from outside Access since Access now protects the bare host; the unique-hash URL serves the same artifacts.)
+- `13:52Z` Walk artifacts committed: `frontend/playwright.config.ts`, `frontend/scripts/csp-walk.spec.ts`, `frontend/scripts/csp-walk-results.json`. Local `.csp-walk.env` will be removed after the merge.
 
 ## Verification one-liners (cheat sheet)
 
