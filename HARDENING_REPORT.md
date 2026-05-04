@@ -227,6 +227,58 @@ Schedule a re-audit **30 days post-cutover** to look at:
 
 ---
 
+## Cutover log
+
+Chronological record of every state-changing action in the cutover sprint
+(per `CC-PROMPT-icrv-cutover.md`). Times are UTC.
+
+### 2026-05-04 — Phase A (autonomous prep)
+
+- `02:00Z` Branch state verified: 8 hardening commits on `main`, 7 PR branches present, working tree clean.
+- `02:00Z` GitHub remote created — private `americaniron/icrv` (https://github.com/americaniron/icrv). Pushed `main` + all `hardening/*` branches.
+- `02:01Z` Provisioned `KV_REVOKED` (id `09db5d58b02948a4ad5d60536dfbab01`) and `KV_JWKS` (id `42576af6e50642f492fc1cc03c5f1e7b`); ids written to `workers/icrv-api/wrangler.toml`. Commit `95edc99 chore(infra): bind KV_REVOKED and KV_JWKS namespaces`.
+- `02:02Z` Deleted `GET /dev/gen-token` HS256-mint backdoor from `workers/icrv-api/src/index.ts`; added regression spec at `workers/icrv-api/src/__tests__/no-dev-token.spec.ts` (greps source for `/dev/`, `gen-token`, `X-Dev-Key`, `icrv_dev_bootstrap`). `@types/node` added to `workers/icrv-api` for the spec. Commit `f718518 chore(security): remove dev token mint backdoor (closes leftover from C1)`. Tests now 5/5 (3 role-gate + 2 no-dev-token).
+- `02:03Z` Created branch `hardening/07-final-cutover` with the prepared 3-line diff (`CORS_ALLOWLIST` + `BROWSER_ALLOWED_ORIGINS` minus `icrv-dashboard.pages.dev`; `frontend/wrangler.toml` `VITE_API_BASE_URL` → `https://api.icrv.app`). Pushed to origin. Will only merge into `main` on Phase E `dns-live`.
+- `02:04Z` Baseline audit-check captured against existing **production** (pre-hardening code, 6 days old):
+
+```
+=== Security headers (PR 1, PR 2) ===
+x-content-type-options: nosniff   # only this — no CSP, HSTS, X-Frame-Options, etc.
+
+=== Cache headers on hashed assets (PR 1) ===
+cache-control: public, max-age=0, must-revalidate   # H1 still open
+
+=== robots.txt is real text (PR 1) ===
+content-type: text/html; charset=utf-8   # SPA fallback returning HTML
+
+=== 404 returns 404 (PR 1) ===
+HTTP/2 200    # H5 still open
+
+=== API requires auth ===
+  /v1/contacts                             401
+  /v1/dashboard/status                     401
+  /v1/admin/integrations                   401
+  /v1/agent-controls/kill-switch           401
+  /v1/auth/me                              401
+
+=== Rate limit kicks in (PR 3) ===
+  401 ×25, no 429   # C5 still open on prod
+
+=== CORS reflects with Vary (PR 3) ===
+access-control-allow-origin: https://app.icrv.app   # no Vary: Origin (M2)
+
+=== No legacy token storage in bundle (PR 6) ===
+ icrv_token occurrences in bundle: 2 (expect 0 after PR 6)
+
+=== Sentry initialized in bundle (PR 4) ===
+ sentry references: 0 (expect >0)
+```
+
+This confirms the hardening code has not yet been promoted to production —
+exactly what Phase C / Phase E will fix.
+
+- `02:05Z` Favicon ICO/PNG generation **skipped** — neither `magick`, `convert`, nor `sharp` is available locally. Backlog item carries forward.
+
 ## Verification one-liners (cheat sheet)
 
 ```bash
