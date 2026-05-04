@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-05-04T13:29:38.047Z",
+  "routes": [
+    "/",
+    "/contacts",
+    "/campaigns",
+    "/ai",
+    "/logs",
+    "/calls",
+    "/settings"
+  ],
+  "violationCount": 0,
+  "violations": []
+}

@@ -10,3 +10,4 @@ CC-PROMPT-icrv-cutover.md
 .env
 .env.local
 .env.*.local
+.csp-walk.env
