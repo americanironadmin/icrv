@@ -184,11 +184,8 @@ PREVIEW_URL="$PREVIEW" npm run audit:a11y    # zero Serious / Critical
 Items observed during the run that are out of scope for the current audit and
 should be filed as separate tickets.
 
-1. **Remove `/dev/gen-token` endpoint** (`workers/icrv-api/src/index.ts:172`).
-   It still mints a 30-day HS256 JWT behind a single hardcoded `X-Dev-Key`.
-   Useful during the bootstrap phase, but it's an HS256-mint backdoor that
-   contradicts the Cloudflare Access cutover. Delete it as a one-line
-   follow-up commit once Access is verified working in production.
+1. **Remove `/dev/gen-token` endpoint** — done in cutover Phase A; regression
+   test at `workers/icrv-api/src/__tests__/no-dev-token.spec.ts` keeps it gone.
 
 2. **Favicon ICO/PNG (L1)** — needs a real binary asset (a 32×32 `.ico` and a
    180×180 `apple-touch-icon.png`). Generate from `frontend/public/favicon.svg`

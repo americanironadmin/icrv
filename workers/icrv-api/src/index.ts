@@ -196,35 +196,6 @@ app.get('/oauth/google/callback', async (c) => {
   return c.redirect(`${frontendBase}?google_connected=1${emailParam}`);
 });
 
-// ── TEMPORARY: one-shot admin token generator — REMOVE AFTER GOOGLE OAUTH SETUP ──
-// Gate: X-Dev-Key header must match hardcoded value (source-only, never stored)
-app.get('/dev/gen-token', async (c) => {
-  const devKey = c.req.header('X-Dev-Key');
-  if (devKey !== 'icrv_dev_bootstrap_remove_after_oauth_2026') return c.json({ error: 'forbidden' }, 403);
-  const signingKey = c.env.JWT_SIGNING_KEY;
-  if (!signingKey) return c.json({ error: 'jwt_signing_key_not_configured' }, 500);
-  const now = Math.floor(Date.now() / 1000);
-  const headerObj = { alg: 'HS256', typ: 'JWT' };
-  const payloadObj = {
-    sub: 'user_admin_001', email: 'adam@americaniron1.com',
-    tenant_id: 'tenant_americaniron_001', role: 'admin',
-    iat: now, exp: now + 86400 * 30, // 30 days
-  };
-  const b64url = (obj: unknown) => btoa(JSON.stringify(obj))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-  const h = b64url(headerObj);
-  const p = b64url(payloadObj);
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(signingKey),
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const rawSig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(`${h}.${p}`));
-  const sig = btoa(String.fromCharCode(...new Uint8Array(rawSig)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-  return c.json({ token: `${h}.${p}.${sig}`, expires_in_days: 30 });
-});
-// ── END TEMPORARY ──────────────────────────────────────────────────────────────
-
 const v1 = new Hono<HonoCtx>();
 
 // Rate limit before auth so brute-force probes burn KV writes, not DB lookups.
