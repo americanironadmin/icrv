@@ -27,10 +27,11 @@ import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
 import { scrubPii } from '@icrv/shared/sentry-scrub';
 
-// Single source of truth for the CORS allowlist. PR 7 will drop the temporary
-// pages.dev origin once app.icrv.app DNS is live.
+// Single source of truth for the CORS allowlist. The pages.dev origin is kept
+// during the cutover so preview deploys can still hit the API; remove once the
+// preview window closes.
 export const CORS_ALLOWLIST: ReadonlySet<string> = new Set([
-  'https://app.icrv.app',
+  'https://icrv.americanironus.com',
   'http://localhost:5173',
   'https://icrv-dashboard.pages.dev',
 ]);
@@ -104,7 +105,7 @@ app.get('/oauth/google/callback', async (c) => {
   const state = c.req.query('state');
   const error = c.req.query('error');
 
-  const frontendBase = 'https://icrv-dashboard.pages.dev';
+  const frontendBase = 'https://icrv.americanironus.com';
 
   if (error) {
     return c.redirect(`${frontendBase}?google_error=${encodeURIComponent(error)}`);

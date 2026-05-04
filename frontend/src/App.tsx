@@ -30,7 +30,7 @@ import Settings       from './pages/Settings'
 import NotFound       from './pages/NotFound'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.icrv.app'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://icrv-api.americanironus.com'
 const ACCESS_TEAM_DOMAIN = (import.meta.env.VITE_CF_ACCESS_TEAM_DOMAIN as string | undefined) ?? ''
 const ACCESS_AUD         = (import.meta.env.VITE_CF_ACCESS_AUD as string | undefined) ?? ''
 

@@ -103,7 +103,7 @@ async function verifyCfAccess(token: string, env: ApiEnv): Promise<JwtPayload> {
 // behaviour is still alive in some browser tab — reject so it can't slip past
 // the cutover.
 const BROWSER_ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
-  'https://app.icrv.app',
+  'https://icrv.americanironus.com',
   'http://localhost:5173',
   'https://icrv-dashboard.pages.dev',
 ]);
