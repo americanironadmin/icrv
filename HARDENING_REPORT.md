@@ -415,6 +415,42 @@ access-control-allow-credentials: true
 - `13:51Z` `bash scripts/audit-check.sh https://f40eefbb.icrv-dashboard.pages.dev https://icrv-api.americanironus.com` — security headers section emits the expected enforcing CSP, HSTS, COOP, Permissions-Policy, X-Frame-Options DENY, X-Content-Type-Options. (Custom domain `icrv.americanironus.com` cannot be audited from outside Access since Access now protects the bare host; the unique-hash URL serves the same artifacts.)
 - `13:52Z` Walk artifacts committed: `frontend/playwright.config.ts`, `frontend/scripts/csp-walk.spec.ts`, `frontend/scripts/csp-walk-results.json`. Local `.csp-walk.env` will be removed after the merge.
 
+### 2026-05-04 — Functional smoke test (deferred) + campaign-builder fixes
+
+Ran `CC-PROMPT-icrv-functional-smoke.md` end-to-end discovery (Phase A) before the
+user-driven UI test (Phase C). Phase C was deferred in favour of a small set of
+fixes that block any meaningful test today.
+
+**Phase A — operational state (read-only):**
+- All 8 workers deployed; latest version IDs captured in cutover log; `wrangler tail` confirmed reachable.
+- Secrets present per worker: `GOOGLE_CLIENT_ID/SECRET` on api/agent/email/consumer; `MASTER_KEK` everywhere; `JWT_SIGNING_KEY` on api; `ANTHROPIC_API_KEY` on agent/voice/consumer; `WA_*` split across whatsapp/hooks/consumer; `RC_JWT` + `EL_API_KEY` + `EL_LLM_SHARED_SECRET` on voice; `EL_WEBHOOK_SECRET` + `RC_WEBHOOK_TOKEN` on hooks; `icrv-cron` has no secrets (expected).
+- D1 state: 1 tenant (`tenant_americaniron_001`), 1 admin user, 1 contact (`icrv-test-self-001`, adam@americaniron1.com), 0 templates, 0 consents, 2 campaigns (1 cancelled / 1 draft), 1 sent message (manual `/send` POST from 2026-04-28), 0 agent_runs, 0 agent_actions, 6 audit_logs.
+- Active integrations rows: `oauth_tokens` provider=gmail (active, email=adam@americaniron1.com); `api_credentials` provider in {gmail, ringcentral, elevenlabs} (active); WhatsApp has no api_credentials row → not testable.
+- Public surface: every endpoint returns 401 to anonymous curls — expected because Access is in OAuth Protected Resource mode (matches the post-CSP-flip state). CSP enforcing still active.
+
+**Root-cause diagnosis of the previously failed campaign:**
+- Campaign `180a872e-d47c-45f2-8c75-18d3affeae41` was launched at `2026-05-03T08:08:45.695Z` and cancelled at `08:08:51.094Z` — **5.4 seconds later**.
+- `icrv-cron` campaign tick is `* * * * *` (once per minute on the boundary). No tick fired in the 5.4-second active window, so `agent_runs` was never written. By the next tick, both `campaign.status` and `enrollment.status` had flipped, so the cron's `WHERE active AND active` join filtered the row out.
+- Independently, the campaign step had `credential_id=NULL` and `template_id=7dc1b66a-…` pointing at a template that no longer exists in `templates`. Even with the cron timing fixed, the step would have been malformed — though in practice `workers/icrv-agent/src/context-loader.ts:330` resolves the email's `oauth_token_id` directly from `oauth_tokens` by tenant and ignores the step's `credential_id`, so the immediate sender path would still have worked once the cron picked it up. The credential-id field is informational, not load-bearing for email today.
+
+**UI gaps that pre-loaded this trap:**
+- `frontend/src/pages/Campaigns.tsx` declared a `credentials` state but never fetched anything to populate it. The credential field rendered as a free-text UUID input — no dropdown, no auto-bind from `/v1/admin/integrations`, no link to Settings if disconnected.
+- The `templates` table is empty in production, so the Template `<select>` is also empty — operators can't add a step without first creating a template via the Templates page.
+
+**Fixes applied in this commit (no schema/secret changes):**
+- Reused the existing `GET /v1/admin/integrations` endpoint (returns `gmail.oauth_token_id`, `whatsapp.credential_id`, `ringcentral.credential_id`, `elevenlabs.credential_id`) instead of adding a new credentials route.
+- Added `credentialForChannel()` helper in `Campaigns.tsx` that maps the campaign channel to the right integration key (email→gmail.oauth_token_id, whatsapp→whatsapp.credential_id, voice→ringcentral.credential_id; ElevenLabs is resolved server-side by the agent).
+- `CampaignForm` now fetches integrations alongside templates, auto-binds `stepForm.credential_id` whenever channel changes or integrations finish loading, and replaces the free-text input with a read-only "Sending from" field that shows a green `connected` badge + the account label, or a "Connect X in Settings" hint when the relevant provider isn't wired up. Validation toast is split so missing template vs missing credential give the right message.
+- Post-launch toast now includes "First message dispatches within 60 seconds — give it a minute before pausing or cancelling." This is operational guidance for the cron-tick race; the structural fix (have `/launch` enqueue an immediate Q_AGENT job for due enrollments) is filed in the backlog as a follow-up.
+
+**Verification:** `cd frontend && npx tsc --noEmit` clean; `npm run build` clean (640 modules, 4 chunks, 959ms). No worker code changed, so worker test suites unchanged.
+
+**Backlog items added by this pass:**
+1. Have `POST /v1/campaigns/:id/launch` (or `CampaignCoordinatorDO`) enqueue an immediate Q_AGENT message for any enrollment whose `next_step_at <= now`, instead of relying on the next cron tick. This eliminates the "cancel within 60s wins the race" failure mode entirely.
+2. The campaign form's "Inline Email Template (optional)" subject/body fields in Step 0 are not sent on submit — they're collected in state but never used. Either wire them through (auto-create a template before posting the campaign) or remove the UI to avoid confusion.
+3. Seed at least one default email template per tenant on provisioning so the Steps `<select>` is never empty for new tenants.
+4. WhatsApp has secrets on `icrv-whatsapp` but no `api_credentials` row for the tenant, and `WA_ACCESS_TOKEN` lives on `icrv-hooks`/`icrv-consumer` but not on `icrv-whatsapp` itself — re-verify the bootstrap flow (`POST /v1/admin/integrations/whatsapp`) actually wires both before attempting a WA smoke test.
+
 ## Verification one-liners (cheat sheet)
 
 ```bash

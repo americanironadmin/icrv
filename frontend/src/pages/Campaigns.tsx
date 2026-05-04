@@ -3,8 +3,38 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { campaignsApi, type Campaign, type CampaignCreatePayload, type Template, type CampaignChannel } from '@/api/campaigns'
+import { adminApi, type IntegrationsState } from '@/api/admin'
 import { useApp } from '@/context/AppContext'
 import { formatDistanceToNow, format } from 'date-fns'
+
+// Maps the campaign channel to the integration that supplies its dispatch credential.
+// Email steps store oauth_tokens.id; WhatsApp/voice steps store api_credentials.id.
+function credentialForChannel(
+  ch: CampaignChannel,
+  integ: IntegrationsState | null,
+): { id: string | null; label: string | null; settingsHint: string } {
+  if (!integ) return { id: null, label: null, settingsHint: 'Loading…' }
+  if (ch === 'email') {
+    return {
+      id: integ.gmail.oauth_token_id,
+      label: integ.gmail.email,
+      settingsHint: 'Connect Gmail in Settings',
+    }
+  }
+  if (ch === 'whatsapp') {
+    return {
+      id: integ.whatsapp.credential_id,
+      label: integ.whatsapp.label,
+      settingsHint: 'Connect WhatsApp in Settings',
+    }
+  }
+  // voice — RingCentral is the per-step credential; ElevenLabs is resolved server-side.
+  return {
+    id: integ.ringcentral.credential_id,
+    label: integ.ringcentral.label,
+    settingsHint: 'Connect RingCentral in Settings',
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -30,7 +60,7 @@ function CampaignForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const { showToast } = useApp()
   const [step, setStep] = useState(0)
   const [templates, setTemplates] = useState<Template[]>([])
-  const [credentials, setCredentials] = useState<{ id: string; name: string; provider: string }[]>([])
+  const [integrations, setIntegrations] = useState<IntegrationsState | null>(null)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<CampaignCreatePayload>({
     name: '',
@@ -51,10 +81,12 @@ function CampaignForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   useEffect(() => {
     const load = async () => {
       try {
-        const [tplRes] = await Promise.all([
+        const [tplRes, integRes] = await Promise.all([
           campaignsApi.listTemplates(form.channel),
+          adminApi.getIntegrations(),
         ])
         setTemplates(tplRes.templates)
+        setIntegrations(integRes)
       } catch {
         // non-fatal
       }
@@ -62,12 +94,24 @@ function CampaignForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     load()
   }, [form.channel])
 
+  // When channel changes (or integrations finish loading), auto-bind the matching
+  // connected credential to the in-flight step form so users don't need to know UUIDs.
+  useEffect(() => {
+    const cred = credentialForChannel(form.channel, integrations)
+    setStepForm((p) => ({ ...p, credential_id: cred.id ?? '' }))
+  }, [form.channel, integrations])
+
   const setF = (k: keyof CampaignCreatePayload, v: unknown) =>
     setForm((p) => ({ ...p, [k]: v }))
 
   const addStep = () => {
-    if (!stepForm.template_id || !stepForm.credential_id) {
-      showToast({ type: 'warning', title: 'Select template and credential' })
+    if (!stepForm.template_id) {
+      showToast({ type: 'warning', title: 'Select a template' })
+      return
+    }
+    if (!stepForm.credential_id) {
+      const cred = credentialForChannel(form.channel, integrations)
+      showToast({ type: 'warning', title: 'No credential connected', message: cred.settingsHint })
       return
     }
     setF('steps', [...form.steps, {
@@ -184,8 +228,23 @@ function CampaignForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
                     </select>
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Credential ID</label>
-                    <input className="form-control form-control-mono" value={stepForm.credential_id} onChange={(e) => setStepForm(p => ({ ...p, credential_id: e.target.value }))} placeholder="cred_uuid" />
+                    <label className="form-label">Sending from</label>
+                    {(() => {
+                      const cred = credentialForChannel(form.channel, integrations)
+                      if (!cred.id) {
+                        return (
+                          <div className="form-control" style={{ display: 'flex', alignItems: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            {cred.settingsHint}
+                          </div>
+                        )
+                      }
+                      return (
+                        <div className="form-control" style={{ display: 'flex', alignItems: 'center' }}>
+                          <span className="badge badge-green" style={{ marginRight: '0.5rem' }}>connected</span>
+                          <span className="text-sm">{cred.label ?? cred.id}</span>
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div className="form-group">
                     <label className="form-label">Delay (hours)</label>
@@ -247,7 +306,13 @@ function CampaignDetail({ campaign, onRefresh }: { campaign: Campaign; onRefresh
     try {
       if (action === 'launch') {
         const res = await campaignsApi.launch(campaign.id)
-        showToast({ type: 'success', title: 'Campaign launched', message: `${res.enrolled} contacts enrolled` })
+        // The campaign tick runs once per minute; first dispatch happens within ~60s of launch.
+        // Surface this so operators don't cancel mid-race and assume nothing is happening.
+        showToast({
+          type: 'success',
+          title: 'Campaign launched',
+          message: `${res.enrolled} contact${res.enrolled === 1 ? '' : 's'} enrolled. First message dispatches within 60 seconds — give it a minute before pausing or cancelling.`,
+        })
       } else if (action === 'pause') {
         await campaignsApi.pause(campaign.id)
         showToast({ type: 'info', title: 'Campaign paused' })
