@@ -22,7 +22,7 @@ DSNs, secret config) so they can be done in one sitting.
 | C4 | Critical | Headers | PR 1, PR 2 | `frontend/public/_headers` — HSTS, X-Frame-Options DENY, Permissions-Policy, COOP, X-Content-Type-Options, Referrer-Policy, CSP | `curl -sI <pages>/contacts \| grep -iE "strict-transport\|x-frame\|permissions-policy\|cross-origin-opener\|content-security-policy"` |
 | C5 | Critical | API | PR 3 | `packages/shared/src/rate-limit.ts` + `workers/icrv-api/src/index.ts` — 10/60s on `/v1/auth/*`, 120/60s on `/v1/*` | 25× burst returns 401s then 429s |
 | C6 | Critical | Auth | PR 3 + PR 6 | `KV_REVOKED` + `/v1/auth/logout` + `authMiddleware` JTI check | Logout → JTI persisted → next request 401 token_revoked |
-| C7 | Critical | Hosting | PR 6 (partial) → human cutover | Code is ready for `app.icrv.app` / `api.icrv.app`. The DNS + final CORS trim are described in **Manual steps** below | After DNS + CORS trim: `curl -sI https://app.icrv.app/` |
+| C7 | Critical | Hosting | PR 6 + cutover Phase E | Live on `https://icrv.americanironus.com` (Pages) and `https://icrv-api.americanironus.com` (Worker). `icrv-api` deployed at version `a053e4d3-3649-445c-9991-e06f60d3a4ae`; Pages deployment `36a4f502.icrv-dashboard.pages.dev` aliased to `main` branch / custom domain. CORS allowlist trimmed to `icrv.americanironus.com` + `pages.dev` (transitional) + `localhost:5173`. | `curl -sI https://icrv-api.americanironus.com/health` → `200`; `curl -sI https://icrv.americanironus.com/` → `302 → cloudflareaccess.com` |
 | H1 | High | Perf | PR 1 | `_headers` — `/assets/*` → `max-age=31536000, immutable` | `curl -sI <pages>/assets/index-*.js \| grep cache-control` |
 | H2 | High | Reliability | PR 5 | `frontend/src/components/RouteErrorBoundary.tsx`, wired into every Route in `App.tsx` | Throw an error from DevTools → see route boundary, not blank screen |
 | H3 | High | Ops | PR 4 | `@sentry/cloudflare` on api/hooks/voice/agent + `@sentry/react` on Pages + `scrubPii` everywhere | After DSN set: trigger error → event lands in Sentry |
@@ -198,12 +198,23 @@ should be filed as separate tickets.
    should ship with the a11y fixes when `npm run audit:a11y` is run for the
    first time.
 
-4. **CSP enforcing-mode flip (PR 2)** — the policy ships in
-   `Content-Security-Policy-Report-Only` mode. After walking every route on
-   preview and confirming `[csp-report]` worker logs are clean, push a follow-up
-   commit on PR 2's branch (`hardening/02-csp`) replacing
-   `Content-Security-Policy-Report-Only:` with `Content-Security-Policy:` in
-   `frontend/public/_headers`.
+4. **CSP enforcing-mode flip (PR 2 / Phase D follow-up)** — the policy is live
+   as `Content-Security-Policy-Report-Only`. To flip to enforcing:
+   1. Open `https://icrv.americanironus.com` in a browser, complete Access
+      login, walk every sidebar route (`/`, `/contacts`, `/campaigns`, `/ai`,
+      `/logs`, `/calls`, `/settings`) plus modals: new contact, edit contact,
+      bulk upload (cancel), AI control panel kill-switch dialog, run reject
+      dialog, contact-delete confirm dialog.
+   2. Watch the worker tail in a second terminal:
+      `wrangler tail --name icrv-api --format pretty | grep -i csp-report`
+   3. If both DevTools Console AND `wrangler tail` are clean of CSP violations,
+      push a one-line follow-up commit on `main`:
+      ```
+      sed -i '' 's/Content-Security-Policy-Report-Only:/Content-Security-Policy:/' frontend/public/_headers
+      git commit -am "feat(security): flip CSP from Report-Only to enforcing"
+      git push origin main
+      cd frontend && npm run build && wrangler pages deploy dist --project-name icrv-dashboard --branch main
+      ```
 
 5. **Sentry session replay** — currently disabled by default. If you decide
    replay is acceptable after a privacy review, flip the
@@ -212,6 +223,46 @@ should be filed as separate tickets.
 6. **Pre-existing typecheck error** — fixed in PR 1 commit (`existing!.id` in
    dead code at `workers/icrv-api/src/routes/misc.ts`). Worth a real fix to
    delete the dead branch entirely, but out of scope.
+
+7. **Sentry DSNs (PR 4)** — the SDK is wired but DSNs are empty everywhere.
+   Once Sentry projects exist, run:
+   ```
+   for w in icrv-api icrv-hooks icrv-voice icrv-agent; do
+     echo "<workers DSN>" | wrangler secret put SENTRY_DSN --name $w
+   done
+   ```
+   Then add `VITE_SENTRY_DSN` to the Pages environment-variable set
+   (Cloudflare → Pages → icrv-dashboard → Settings → Environment Variables).
+
+8. **OAuth callback hostname (icrv-api/src/index.ts)** — both the
+   `redirect_uri` baked into the Google OAuth request and the `frontendBase`
+   used to redirect after a successful exchange are still `*.workers.dev` in
+   one place and `icrv.americanironus.com` in another. Long-term: pin all
+   three to `icrv-api.americanironus.com` for the request and
+   `icrv.americanironus.com` for the post-exchange redirect, and update the
+   Authorized Redirect URI in Google Cloud Console accordingly.
+
+9. **`icrv-dashboard.pages.dev` allowlist transitional entry** — the CORS
+   allowlist in `workers/icrv-api/src/index.ts` and `BROWSER_ALLOWED_ORIGINS`
+   in `auth.ts` still include the legacy `pages.dev` hostname so PR-7
+   preview deploys can hit the API. After the next preview run wraps,
+   delete the line in both files and redeploy.
+
+10. **a11y end-to-end run** — `axe-core/cli` couldn't run from public network
+    (Access intercepts) and the bundled chromedriver/Chrome versions don't
+    match locally. Run from inside the Access boundary:
+    ```
+    npx browser-driver-manager install chrome
+    PREVIEW_URL=https://icrv.americanironus.com npm run audit:a11y
+    ```
+    Or paste a CF_Authorization service-token cookie into axe via
+    `--include-tags` extensions.
+
+11. **Pages 404 status quirk** — branch deploys at
+    `<id>.icrv-dashboard.pages.dev` were observed serving `HTTP/2 200` for
+    unknown routes despite `_redirects /* /index.html 404`. Production deploy
+    at `icrv.americanironus.com` should honour it; verify after the manual
+    walk in #4 above.
 
 ---
 
@@ -318,6 +369,56 @@ cache-control: public, max-age=3600                                      ✓
   unauthenticated public endpoints (/health, /csp-report, /oauth/google/callback)
   or the Access app is scoped to /v1/* only.
 ```
+
+### 2026-05-04 — Phase D ("hold" path chosen)
+
+- `03:10Z` After Phase C smoke-testing surfaced that Cloudflare Access was gating the *entire* `icrv-api.americanironadmin.workers.dev` worker (including `/health`, `/csp-report`, `/oauth/google/callback`), surfaced three options to the user: (1) add `*.icrv-dashboard.pages.dev` + bypass policies, (2) skip walkthrough and go to Phase E, (3) limited Phase D now.
+- `03:30Z` User chose `hold` route: scope-narrow Cloudflare Access on `icrv-api.americanironus.com` to `/v1/*` only. Outcome: `/health`, `/csp-report`, `/oauth/google/callback` are now publicly reachable while every authenticated route remains gated.
+- `03:35Z` User confirmed scope-narrowing works:
+  - `GET /health` → `HTTP/2 200, application/json` (worker-served, public)
+  - `GET /v1/contacts` → `HTTP/2 302` to Cloudflare Access (still gated)
+- The CSP-walk portion of Phase D is **deferred** to a post-cutover manual step: log into Access, walk every sidebar route in DevTools with `wrangler tail --name icrv-api | grep csp-report` open in a second terminal, then push a follow-up commit changing `Content-Security-Policy-Report-Only` → `Content-Security-Policy` in `frontend/public/_headers`. Backlog item recorded.
+
+### 2026-05-04 — Phase E (DNS-gated final cutover)
+
+- `03:39Z` Pre-cutover verification A–I (J was a stray cutoff in the user's message). All checks passed: DNS resolves to Cloudflare edge (Replit conflict cleared), Access gates the new hostnames with the correct AUD, `hardening/07-final-cutover` rebuilt fresh on top of `main` with the correct `americanironus.com` hostnames, no stale baselines.
+- `03:46Z` User typed `dns-live` after confirming the Access scope-narrowing worked.
+- `03:47Z` `git merge --no-ff hardening/07-final-cutover` into `main` (commit `92bb577`); pushed origin.
+- `03:49Z` **icrv-api production redeployed** (version `a053e4d3-3649-445c-9991-e06f60d3a4ae`) with the corrected CORS allowlist (`https://icrv.americanironus.com` replacing `https://app.icrv.app`).
+- `03:50Z` **frontend Pages production deployed** to branch `main`. Build env: `VITE_API_BASE_URL=https://icrv-api.americanironus.com`, `VITE_CF_ACCESS_TEAM_DOMAIN=americanironadmin.cloudflareaccess.com`, `VITE_CF_ACCESS_AUD=cc08483a7cec…`. Bundle verified: 2 occurrences of new API hostname baked in, 0 references to legacy `icrv_token`. Deployment URL: `https://36a4f502.icrv-dashboard.pages.dev` (aliased to custom domain `https://icrv.americanironus.com`).
+- `03:50Z` Final post-cutover verification:
+
+```
+=== Pages root + AuthGate redirect ===
+HTTP/2 302
+location: https://americanironadmin.cloudflareaccess.com/cdn-cgi/access/login/icrv.americanironus.com?...
+server: cloudflare
+
+=== API /health (public per Access scope-narrowing) ===
+HTTP/2 200
+{"ok":true,"service":"icrv-api","ts":"2026-05-04T03:50:39.160Z"}
+
+=== API /v1/* still gated by Access ===
+  /v1/contacts                             302
+  /v1/dashboard/status                     302
+  /v1/admin/integrations                   302
+  /v1/agent-controls/kill-switch           302
+  /v1/auth/me                              302
+
+=== /csp-report public (Access bypass works) ===
+204                                        ← worker received the test POST
+
+=== CORS preflight reflection ===
+HTTP/2 200
+access-control-allow-origin: https://icrv.americanironus.com   ← new hostname allowlisted
+vary: Origin                                                    ← M2 still closed
+access-control-allow-credentials: true
+
+=== Worker version pin ===
+2026-05-04T03:49:08.066Z   americanironadmin@icloud.com   a053e4d3-3649-445c-9991-e06f60d3a4ae
+```
+
+- `03:53Z` axe-core a11y check **could not run end-to-end** — two reasons: (a) bundled `chromedriver 148` versus locally installed Chrome 136 (`session not created`), and (b) Access intercepts the page before axe-headless can render, so even with a matching ChromeDriver the tool would only see the Access login screen. Deferred to a manual local pass with a logged-in browser. Backlog item recorded.
 
 ## Verification one-liners (cheat sheet)
 
