@@ -127,7 +127,10 @@ export function createCampaignsRouter(): Hono<HonoCtx> {
     return c.json({ deleted: true });
   });
 
-  // Launch — flips to active and enrolls audience.
+  // Launch — flips to active, enrolls audience, and immediately enqueues an
+  // agent job for each new enrollment so step 0 dispatches without waiting for
+  // the next cron tick (60s race that previously dropped messages when an
+  // operator cancelled mid-window).
   // Audience filter v1: { tag?: string }. Empty = all contacts.
   app.post('/:id/launch', async (c) => {
     if (c.get('user_role') === 'viewer') return c.json({ error: 'forbidden' }, 403);
@@ -153,26 +156,118 @@ export function createCampaignsRouter(): Hono<HonoCtx> {
       contactIds = (r.results ?? []).map(x => x.id);
     }
 
-    let enrolled = 0;
+    // Resolve step 0 once — same for every new enrollment in this campaign.
+    const step0 = await c.env.DB.prepare(
+      `SELECT id, channel, template_id, credential_id, delay_hours
+       FROM campaign_steps WHERE campaign_id = ? AND step_index = 0`,
+    ).bind(id).first<{
+      id: string; channel: string; template_id: string|null;
+      credential_id: string|null; delay_hours: number;
+    }>();
+
+    const newEnrollments: { enrollment_id: string; contact_id: string }[] = [];
     for (const cid of contactIds) {
       const exists = await c.env.DB.prepare(
         `SELECT id FROM campaign_enrollments WHERE campaign_id = ? AND contact_id = ?`,
       ).bind(id, cid).first<{ id: string }>();
       if (exists) continue;
+      const enrollmentId = uuidv4();
       await c.env.DB.prepare(
         `INSERT INTO campaign_enrollments
            (id, tenant_id, campaign_id, contact_id, status, current_step_index,
             next_step_at, enrolled_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?)`,
-      ).bind(uuidv4(), tenantId, id, cid, now, now, now, now).run();
-      enrolled++;
+      ).bind(enrollmentId, tenantId, id, cid, now, now, now, now).run();
+      newEnrollments.push({ enrollment_id: enrollmentId, contact_id: cid });
     }
 
     await c.env.DB.prepare(
       `UPDATE campaigns SET status='active', launched_at=?, enrolled_count=enrolled_count + ?, updated_at=? WHERE id=?`,
-    ).bind(now, enrolled, now, id).run();
+    ).bind(now, newEnrollments.length, now, id).run();
 
-    return c.json({ launched: true, enrolled });
+    // ── Immediate dispatch — mirror runCampaignTick's per-enrollment work ──
+    // If can-send is denied (daily cap), leave the enrollment for the cron to
+    // retry — same behavior as the cron's own `continue` branch.
+    let dispatched = 0;
+    if (step0) {
+      const doStub = c.env.CAMPAIGN_DO.get(c.env.CAMPAIGN_DO.idFromName(`${tenantId}:${id}`));
+      for (const e of newEnrollments) {
+        try {
+          const canSendResp = await doStub.fetch('http://do/can-send', {
+            method: 'POST',
+            body: JSON.stringify({ channel: step0.channel, tenant_id: tenantId }),
+          });
+          const { allowed } = await canSendResp.json() as { allowed: boolean };
+          if (!allowed) continue;
+
+          const runId = uuidv4();
+          await c.env.DB.prepare(
+            `INSERT OR IGNORE INTO agent_runs
+               (id, tenant_id, contact_id, campaign_id, trigger_type, trigger_payload, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'campaign_step', ?, 'queued', ?, ?)`,
+          ).bind(
+            runId, tenantId, e.contact_id, id,
+            JSON.stringify({
+              enrollment_id: e.enrollment_id,
+              step_id:       step0.id,
+              step_index:    0,
+              channel:       step0.channel,
+              template_id:   step0.template_id,
+              credential_id: step0.credential_id,
+            }),
+            now, now,
+          ).run();
+
+          // Advance enrollment: if step 1 exists, bump current_step_index;
+          // otherwise mark the enrollment complete.
+          const nextStep = await c.env.DB.prepare(
+            `SELECT id FROM campaign_steps WHERE campaign_id=? AND step_index=1`,
+          ).bind(id).first<{ id: string }>();
+          if (nextStep) {
+            await c.env.DB.prepare(
+              `UPDATE campaign_enrollments
+                 SET current_step_index = 1,
+                     next_step_at = datetime('now', '+' || ? || ' hours'),
+                     updated_at = ?
+               WHERE id = ?`,
+            ).bind(step0.delay_hours, now, e.enrollment_id).run();
+          } else {
+            await c.env.DB.prepare(
+              `UPDATE campaign_enrollments
+                 SET status='completed', completed_at=?, updated_at=?
+               WHERE id = ?`,
+            ).bind(now, now, e.enrollment_id).run();
+          }
+
+          await c.env.Q_AGENT.send({
+            id:              uuidv4(),
+            tenant_id:       tenantId,
+            attempt:         1,
+            enqueued_at:     now,
+            type:            'agent_job',
+            run_id:          runId,
+            contact_id:      e.contact_id,
+            campaign_id:     id,
+            trigger_type:    'campaign_step',
+            trigger_payload: {
+              enrollment_id: e.enrollment_id,
+              step_id:       step0.id,
+              step_index:    0,
+              channel:       step0.channel,
+              template_id:   step0.template_id,
+              credential_id: step0.credential_id,
+            },
+          });
+          dispatched++;
+        } catch (err) {
+          // Don't fail the launch if one enrollment can't be dispatched —
+          // the cron will retry it next tick.
+          console.error('[campaigns/launch] immediate dispatch failed', e.enrollment_id, err);
+        }
+      }
+    }
+
+    return c.json({ launched: true, enrolled: newEnrollments.length, dispatched });
   });
 
   app.post('/:id/pause', async (c) => {

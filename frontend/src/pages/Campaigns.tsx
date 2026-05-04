@@ -126,11 +126,56 @@ function CampaignForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 
   const handleSubmit = async () => {
     if (!form.name.trim()) { showToast({ type: 'warning', title: 'Campaign name required' }); return }
-    if (form.steps.length === 0) { showToast({ type: 'warning', title: 'Add at least one step' }); return }
+
+    // Inline-template shortcut: if the user filled the Step 0 inline template
+    // and didn't add manual steps, save the template and auto-add a single
+    // step that uses it. This makes the Steps tab optional for the common
+    // "one email, send now" case.
+    let payload: CampaignCreatePayload = form
+    if (
+      form.steps.length === 0 &&
+      form.channel === 'email' &&
+      inlineTemplate.subject.trim() &&
+      inlineTemplate.body_html.trim()
+    ) {
+      const cred = credentialForChannel('email', integrations)
+      if (!cred.id) {
+        showToast({ type: 'warning', title: 'No Gmail account connected', message: cred.settingsHint })
+        return
+      }
+      try {
+        const tpl = await campaignsApi.createTemplate({
+          name: form.name || 'Inline template',
+          channel: 'email',
+          subject: inlineTemplate.subject,
+          body_html: inlineTemplate.body_html,
+        })
+        payload = {
+          ...form,
+          steps: [{
+            step_index: 0,
+            channel: 'email',
+            template_id: tpl.id,
+            credential_id: cred.id,
+            delay_hours: 0,
+          }],
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Template create failed'
+        showToast({ type: 'error', title: 'Inline template failed', message: msg })
+        return
+      }
+    }
+
+    if (payload.steps.length === 0) {
+      showToast({ type: 'warning', title: 'Add at least one step', message: 'Or fill in the inline template on the Details tab.' })
+      return
+    }
+
     setSaving(true)
     try {
-      await campaignsApi.create(form)
-      showToast({ type: 'success', title: 'Campaign created', message: form.name })
+      await campaignsApi.create(payload)
+      showToast({ type: 'success', title: 'Campaign created', message: payload.name })
       onSaved()
       onClose()
     } catch (err: unknown) {

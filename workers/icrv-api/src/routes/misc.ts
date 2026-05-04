@@ -684,5 +684,66 @@ export function createAdminRouter(): Hono<HonoCtx> {
     return c.json(result);
   });
 
+  // ── POST /v1/admin/bootstrap-templates ─────────────────────────────────────
+  // Idempotently seeds one default template per channel for the caller's tenant
+  // so the campaign builder's Template <select> is never empty for new tenants.
+  // Skips any channel that already has at least one template.
+  app.post('/bootstrap-templates', async (c) => {
+    const tenantId = c.get('tenant_id');
+    const now = nowISO();
+
+    const defaults: Array<{
+      channel: 'email' | 'whatsapp' | 'voice';
+      name: string;
+      subject?: string;
+      body_html?: string;
+      body_text?: string;
+      template_name?: string;
+    }> = [
+      {
+        channel: 'email',
+        name: 'Default — Intro Email',
+        subject: 'Hello from {{tenant_name}}',
+        body_html: '<p>Hi {{contact_name}},</p><p>Thanks for connecting with us. Reply to this email any time and we will get back to you.</p><p>— {{from_name}}</p>',
+        body_text: 'Hi {{contact_name}},\n\nThanks for connecting with us. Reply to this email any time and we will get back to you.\n\n— {{from_name}}',
+      },
+      {
+        channel: 'whatsapp',
+        name: 'Default — WhatsApp Template',
+        template_name: 'hello_world',
+      },
+      {
+        channel: 'voice',
+        name: 'Default — Voice Script',
+        body_text: 'Hi {{contact_name}}, this is {{from_name}} calling from {{tenant_name}}. I wanted to follow up briefly — do you have a minute?',
+      },
+    ];
+
+    const created: string[] = [];
+    const skipped: string[] = [];
+
+    for (const t of defaults) {
+      const existing = await c.env.DB.prepare(
+        `SELECT id FROM templates WHERE tenant_id=? AND channel=? LIMIT 1`,
+      ).bind(tenantId, t.channel).first<{ id: string }>();
+      if (existing) { skipped.push(t.channel); continue; }
+
+      await c.env.DB.prepare(
+        `INSERT INTO templates
+           (id, tenant_id, name, channel, subject, body_html, body_text,
+            content_html, content_text, template_name, template_language, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        uuidv4(), tenantId, t.name, t.channel,
+        t.subject ?? null, t.body_html ?? null, t.body_text ?? null,
+        t.body_html ?? null, t.body_text ?? null,
+        t.template_name ?? null, t.template_name ? 'en_US' : null, now,
+      ).run();
+      created.push(t.channel);
+    }
+
+    return c.json({ tenant_id: tenantId, created, skipped });
+  });
+
   return app;
 }

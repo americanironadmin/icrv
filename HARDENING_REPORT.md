@@ -451,6 +451,35 @@ fixes that block any meaningful test today.
 3. Seed at least one default email template per tenant on provisioning so the Steps `<select>` is never empty for new tenants.
 4. WhatsApp has secrets on `icrv-whatsapp` but no `api_credentials` row for the tenant, and `WA_ACCESS_TOKEN` lives on `icrv-hooks`/`icrv-consumer` but not on `icrv-whatsapp` itself — re-verify the bootstrap flow (`POST /v1/admin/integrations/whatsapp`) actually wires both before attempting a WA smoke test.
 
+### 2026-05-04 — Backlog #1, #2, #3 closed
+
+Three follow-up items from the campaign-builder pass, fixed in one commit:
+
+1. **Immediate-launch enqueue (Backlog #1):** `POST /v1/campaigns/:id/launch`
+   now mirrors `runCampaignTick`'s per-enrollment work for step 0 — checks
+   `CampaignCoordinatorDO.can-send`, inserts `agent_runs`, advances the
+   enrollment, and sends to `Q_AGENT` — instead of leaving the enrollment for
+   the next minute-boundary cron tick. Eliminates the race that previously
+   dropped any campaign cancelled within ~60s of launch. Per-enrollment errors
+   are caught and logged so they don't fail the whole launch — the cron retains
+   its retry behaviour as a backstop. Response now includes `dispatched`
+   alongside `enrolled`.
+2. **Inline-template wiring (Backlog #2):** `CampaignForm.handleSubmit` now
+   detects the inline-template shortcut (channel=email, no manual steps,
+   subject + body_html filled) and on submit creates the template via
+   `campaignsApi.createTemplate`, then auto-adds a single step that uses it
+   bound to the connected Gmail oauth_token_id with delay=0. Steps tab is now
+   optional for the common "one email, send now" case.
+3. **Default templates on tenant provisioning (Backlog #3):** New idempotent
+   `POST /v1/admin/bootstrap-templates` endpoint seeds three default
+   templates per tenant (email intro, WhatsApp `hello_world`, voice script).
+   Skips any channel that already has a template. Existing
+   `tenant_americaniron_001` seeded post-deploy via curl.
+
+**Verification:** `tsc --noEmit` clean for icrv-api + frontend; `npm test` clean
+for icrv-api (5 passed); `vite build` clean (640 modules). No schema or secret
+changes; bindings on icrv-api (`Q_AGENT`, `CAMPAIGN_DO`) were already present.
+
 ## Verification one-liners (cheat sheet)
 
 ```bash
