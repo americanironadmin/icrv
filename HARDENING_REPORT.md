@@ -279,6 +279,46 @@ exactly what Phase C / Phase E will fix.
 
 - `02:05Z` Favicon ICO/PNG generation **skipped** — neither `magick`, `convert`, nor `sharp` is available locally. Backlog item carries forward.
 
+### 2026-05-04 — Phase C (apply config)
+
+- `02:55Z` Phase B input received: team `americanironadmin.cloudflareaccess.com`, AUD provided as a UUID (initially), one operator `adam@americaniron1.com,admin`, Sentry skipped, tenant auto-detect.
+- `02:56Z` Wrangler config updated: `workers/icrv-api/wrangler.toml [vars]` and `frontend/wrangler.toml [vars]` populated with the team domain + AUD. Committed `e582a27 chore(infra): populate Cloudflare Access vars`.
+- `02:57Z` D1 tenant detection: 1 row found (`tenant_americaniron_001` "American Iron LLC") — used. `INSERT OR IGNORE` on user — already present from earlier bootstrap (`user_admin_001` adam@americaniron1.com admin tenant_americaniron_001 active).
+- `02:58Z` **icrv-api production deployed** (version `736c0319-86d6-42ac-9b01-3efc44fdc29e`, ~91 KB gzip) on user-confirmed option A. Ten KV bindings, all queues, all R2 buckets, all DOs, both service bindings, vars including the new CF_ACCESS_*.
+- `02:59Z` Smoke test discovery: Cloudflare Access is **already deployed in front of the entire `icrv-api.americanironadmin.workers.dev` worker**. Every request — including `/health`, `/csp-report`, `/oauth/google/callback` — returns 302 to the Access login. The redirect's meta-JWT exposed the **real** AUD: `cc08483a7cec7b0b502d7816b85ac844f11ae6dc874e55e01ea677902deeadae` (the value the user originally pasted was the UUID-shaped Application ID).
+- `02:59Z` Updated `CF_ACCESS_AUD` / `VITE_CF_ACCESS_AUD` to the real 64-char AUD; redeployed icrv-api (version `7b993f6b-2fae-414e-9103-1a28fb390556`). Committed `10eac4c fix(infra): correct CF_ACCESS_AUD`.
+- `03:00Z` Frontend rebuilt with VITE_* env vars passed inline (Vite reads `import.meta.env.*` from the shell at build time, not from `wrangler.toml [vars]` which only reaches Pages Functions runtime). AUD + team domain confirmed baked into bundle.
+- `03:01Z` Pages preview deployed via `wrangler pages deploy dist --project-name icrv-dashboard --branch hardening-cutover`. Live at `https://hardening-cutover.icrv-dashboard.pages.dev` (alias) / `https://b7662fdc.icrv-dashboard.pages.dev` (deployment URL).
+- `03:01Z` Post-deploy audit-check (preview Pages + production icrv-api):
+
+```
+=== Security headers ===
+strict-transport-security: max-age=31536000; includeSubDomains; preload  ✓
+content-security-policy-report-only: <full v1 policy>                    ✓ (Report-Only)
+cross-origin-opener-policy: same-origin                                  ✓
+permissions-policy: camera=(), microphone=(), geolocation=(), …          ✓
+x-content-type-options: nosniff                                          ✓
+x-frame-options: DENY                                                    ✓
+
+=== robots.txt ===
+content-type: text/plain; charset=utf-8                                  ✓
+cache-control: public, max-age=3600                                      ✓
+
+=== API Access enforcement ===
+/v1/contacts /v1/dashboard/status /v1/admin/integrations
+/v1/agent-controls/kill-switch /v1/auth/me   →   all 302 to Access login ✓
+
+=== Known gaps ===
+- 404 status: hardening-cutover.icrv-dashboard.pages.dev returns HTTP 200 for
+  unknown routes despite _redirects /* /index.html 404 — known Pages quirk on
+  branch deploys; production deploy at icrv-dashboard.pages.dev should honor it.
+- Rate limit / Vary tests blocked: Access intercepts at the edge before our
+  worker code runs, so rate-limit middleware and CORS Vary header don't appear.
+  These will be reachable again once an Access bypass is configured for the
+  unauthenticated public endpoints (/health, /csp-report, /oauth/google/callback)
+  or the Access app is scoped to /v1/* only.
+```
+
 ## Verification one-liners (cheat sheet)
 
 ```bash
