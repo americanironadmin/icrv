@@ -11,5 +11,5 @@ VITE_APP_NAME = "IRON CUSTOMER REACH VMAX"
 #   VITE_CF_ACCESS_TEAM_DOMAIN = acme.cloudflareaccess.com
 #   VITE_CF_ACCESS_AUD         = <Application AUD tag>
 # Until then the SignIn panel will show a "team domain not configured" notice.
-VITE_CF_ACCESS_TEAM_DOMAIN = ""
-VITE_CF_ACCESS_AUD         = ""
+VITE_CF_ACCESS_TEAM_DOMAIN = "americanironadmin.cloudflareaccess.com"
+VITE_CF_ACCESS_AUD         = "cfd1df2d-5678-4588-80d4-2d921e8d4a5c"

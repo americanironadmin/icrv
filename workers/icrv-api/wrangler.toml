@@ -8,8 +8,8 @@ compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-CF_ACCESS_TEAM_DOMAIN = ""
-CF_ACCESS_AUD         = ""
+CF_ACCESS_TEAM_DOMAIN = "americanironadmin.cloudflareaccess.com"
+CF_ACCESS_AUD         = "cfd1df2d-5678-4588-80d4-2d921e8d4a5c"
 ENVIRONMENT           = "production"
 SENTRY_DSN            = ""   # set via: wrangler secret put SENTRY_DSN --name icrv-api
 
