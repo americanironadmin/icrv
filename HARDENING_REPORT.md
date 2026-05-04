@@ -474,7 +474,16 @@ Three follow-up items from the campaign-builder pass, fixed in one commit:
    `POST /v1/admin/bootstrap-templates` endpoint seeds three default
    templates per tenant (email intro, WhatsApp `hello_world`, voice script).
    Skips any channel that already has a template. Existing
-   `tenant_americaniron_001` seeded post-deploy via curl.
+   `tenant_americaniron_001` seeded post-deploy via the equivalent SQL run
+   through `wrangler d1 execute` (calling the endpoint directly requires an
+   Access OAuth bearer that isn't easily produced from a CLI session).
+   - Result: WhatsApp + Voice defaults inserted; **email skipped** because
+     a pre-existing template `7dc1b66a-…` "Heavy Equipment Intro" already
+     occupied that channel slot. That template has `body_html=null` and
+     `body_text=null` (empty body) — a separate gotcha that the bootstrap's
+     coarse "any-template-exists" guard cannot detect. Users can route
+     around this via the new inline-template flow on the campaign form
+     (Backlog #2 above), which creates a fresh, valid template per campaign.
 
 **Verification:** `tsc --noEmit` clean for icrv-api + frontend; `npm test` clean
 for icrv-api (5 passed); `vite build` clean (640 modules). No schema or secret
