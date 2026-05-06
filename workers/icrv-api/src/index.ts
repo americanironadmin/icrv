@@ -23,6 +23,8 @@ import { createContactsRouter }  from './routes/contacts';
 import { createCampaignsRouter, createTemplatesRouter } from './routes/campaigns';
 import { createCallsRouter }     from './routes/calls';
 import { createDashboardRouter, createLogsRouter, createAuthRouter, createAdminRouter } from './routes/misc';
+import { createSettingsRouter } from './routes/settings';
+import { handleUnsubscribe, handleTrackOpen, handleTrackClick } from './routes/public';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
 import { scrubPii } from '@icrv/shared/sentry-scrub';
@@ -83,6 +85,14 @@ app.use('*', async (c, next) => {
 });
 
 app.get('/health', (c) => c.json({ ok: true, service: 'icrv-api', ts: new Date().toISOString() }));
+
+// ─── Public endpoints (NO Access — must be on Access bypass list) ─────────
+// /u/:token       — CAN-SPAM unsubscribe (Phase 2)
+// /track/open     — open pixel (Phase 3)
+// /r              — click redirect (Phase 3)
+app.get('/u/:token', handleUnsubscribe);
+app.get('/track/open', handleTrackOpen);
+app.get('/r', handleTrackClick);
 
 // CSP violation receiver. No auth, no CORS — browsers POST these directly.
 // Accepts both `application/csp-report` (legacy) and `application/reports+json`.
@@ -220,6 +230,7 @@ v1.route('/templates', createTemplatesRouter());
 v1.route('/calls',     createCallsRouter());
 v1.route('/dashboard', createDashboardRouter());
 v1.route('/logs',      createLogsRouter());
+v1.route('/settings',  createSettingsRouter());
 
 // /v1/agent-controls/* — defense-in-depth: viewers blocked at the gateway in
 // addition to whatever icrv-agent enforces internally. Closes the M6 risk where
