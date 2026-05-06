@@ -12,3 +12,7 @@ CC-PROMPT-icrv-cutover.md
 .env.*.local
 .csp-walk.env
 frontend/test-results/
+CC-PROMPT-icrv-functional-smoke.md
+smoke-tests/ # log artifacts stay local
+CC-PROMPT-icrv-el-wiring-verify.md
+CC-PROMPT-icrv-make-it-real.md
