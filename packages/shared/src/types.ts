@@ -28,6 +28,10 @@ export interface BaseEnv {
   Q_WA_IN:          Queue<InboundWaPayload>;
   Q_VOICE_POSTCALL: Queue<VoiceOutPayload | VoicePostcallPayload>;
   Q_AGENT:          Queue<AgentJobPayload>;
+  // Q_IMPORT is only bound on workers that produce/consume bulk imports
+  // (icrv-api producer, icrv-consumer consumer). Optional on BaseEnv to keep
+  // other workers from having to declare an unused binding.
+  Q_IMPORT?:        Queue<ImportJobPayload>;
   Q_RETRY:          Queue<RetryPayload>;
   Q_DLQ:            Queue<QueuePayload>;
 
@@ -166,6 +170,17 @@ export interface VoicePostcallPayload extends QueuePayload {
   rc_call_id:          string;
   el_conversation_id?: string;
   correlation_id:      string;
+}
+
+// ─── Bulk contact imports (Phase 1A — chunked queue) ────────────────────────
+
+export interface ImportJobPayload extends QueuePayload {
+  type:        'import_job';
+  job_id:      string;
+  user_id:     string;
+  r2_key:      string;
+  // Set when this is a continuation chunk (resumed processing).
+  start_row?:  number;
 }
 
 // ─── Agent jobs ──────────────────────────────────────────────────────────────

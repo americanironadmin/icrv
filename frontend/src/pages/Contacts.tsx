@@ -1,8 +1,9 @@
 // src/pages/Contacts.tsx
-// Full contacts module: list, create, edit, delete, CSV bulk upload
+// Full contacts module: list, create, edit, delete, CSV/XLSX bulk upload
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
 import { contactsApi, type Contact, type ContactCreatePayload, type BulkUploadResponse, type UploadJobStatus } from '@/api/contacts'
 import { useApp } from '@/context/AppContext'
 import { formatDistanceToNow } from 'date-fns'
@@ -182,7 +183,7 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const deadlineRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const handleFile = (f: File) => {
+  const handleFile = async (f: File) => {
     if (f.size > MAX_UPLOAD_BYTES) {
       showToast({
         type: 'error',
@@ -191,6 +192,27 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
       })
       return
     }
+    const ext = (f.name.split('.').pop() ?? '').toLowerCase()
+    const isExcel = ext === 'xlsx' || ext === 'xls'
+    if (isExcel) {
+      try {
+        const buf  = await f.arrayBuffer()
+        const wb   = XLSX.read(buf, { type: 'array' })
+        const ws   = wb.Sheets[wb.SheetNames[0]]
+        const csv  = XLSX.utils.sheet_to_csv(ws)
+        const rebuilt = new File([csv], f.name.replace(/\.(xlsx|xls)$/i, '.csv'), { type: 'text/csv' })
+        if (rebuilt.size > MAX_UPLOAD_BYTES) {
+          showToast({ type: 'error', title: 'File too large after conversion', message: 'Reduce rows and retry.' })
+          return
+        }
+        // Recurse with the converted CSV.
+        return handleFile(rebuilt)
+      } catch (err) {
+        showToast({ type: 'error', title: 'Excel parse error', message: (err as Error).message })
+        return
+      }
+    }
+
     // Streaming row count via Papa.parse step callback — bails as soon as we
     // pass the cap so we don't materialise the whole file in memory.
     let rowCount = 0
@@ -234,7 +256,13 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
     setUploading(true)
     try {
       const res: BulkUploadResponse = await contactsApi.bulkUpload(file)
-      showToast({ type: 'info', title: 'Upload queued', message: `Job ${res.job_id} — ${res.total_rows} rows` })
+      showToast({
+        type: 'info',
+        title: 'Upload queued',
+        message: res.total_rows
+          ? `Job ${res.job_id} — ${res.total_rows} rows`
+          : `Job ${res.job_id} — processing in background`,
+      })
       // Hard 5-minute deadline so a stuck job can't poll forever.
       deadlineRef.current = setTimeout(() => {
         stopPolling()
@@ -274,7 +302,7 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
       <div className="modal">
         <div className="modal-header">
           <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            Bulk CSV Upload
+            Bulk Upload (CSV or Excel)
           </h3>
           <button className="btn btn-ghost btn-icon" onClick={onClose}>✕</button>
         </div>
@@ -294,12 +322,12 @@ function BulkUploadModal({ onClose, onDone }: { onClose: () => void; onDone: () 
           >
             <div style={{ fontSize: '2rem', marginBottom: '0.5rem', color: 'var(--text-muted)' }}>⇑</div>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: '0.85rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
-              {file ? file.name : 'Drop CSV or click to browse'}
+              {file ? file.name : 'Drop CSV or Excel file, or click to browse'}
             </div>
             <div className="text-xs text-muted" style={{ marginTop: '0.35rem' }}>
               Required columns: name, email, phone, whatsapp_phone, consent_email, consent_whatsapp, consent_voice
             </div>
-            <input id="csv-input" type="file" accept=".csv" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
+            <input id="csv-input" type="file" accept=".csv,.tsv,.xlsx,.xls" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
           </div>
 
           {preview.length > 0 && (

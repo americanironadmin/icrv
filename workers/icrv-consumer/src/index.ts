@@ -12,10 +12,11 @@
 // retry queue (re-enqueue after delay), and the DLQ (audit + alert).
 
 import type {
-  BaseEnv, InboundEmailPayload, RetryPayload, QueuePayload,
+  BaseEnv, InboundEmailPayload, RetryPayload, QueuePayload, ImportJobPayload,
 } from '@icrv/shared/types';
 import { uuidv4, nowISO } from '@icrv/shared/crypto';
 import { isDuplicate } from '@icrv/shared/queue-helpers';
+import { processImportJob } from './import-processor';
 
 interface ConsumerEnv extends BaseEnv {
   GOOGLE_CLIENT_ID:     string;
@@ -27,10 +28,10 @@ export default {
     return Response.json({ ok: true, service: 'icrv-consumer' });
   },
 
-  async queue(batch: MessageBatch<InboundEmailPayload | RetryPayload | QueuePayload>, env: ConsumerEnv): Promise<void> {
+  async queue(batch: MessageBatch<InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload>, env: ConsumerEnv): Promise<void> {
     for (const msg of batch.messages) {
       try {
-        const body = msg.body as InboundEmailPayload | RetryPayload | QueuePayload;
+        const body = msg.body as InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload;
 
         if (body.type === 'email_in') {
           if (await isDuplicate(env, body.id)) { msg.ack(); continue; }
@@ -41,6 +42,13 @@ export default {
 
         if (body.type === 'retry') {
           await processRetry(body as RetryPayload, env);
+          msg.ack();
+          continue;
+        }
+
+        if (body.type === 'import_job') {
+          if (await isDuplicate(env, body.id)) { msg.ack(); continue; }
+          await processImportJob(body as ImportJobPayload, env);
           msg.ack();
           continue;
         }
@@ -63,7 +71,7 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<ConsumerEnv, InboundEmailPayload | RetryPayload | QueuePayload>;
+} satisfies ExportedHandler<ConsumerEnv, InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload>;
 
 // ─── Inbound Gmail processing ───────────────────────────────────────────────
 
