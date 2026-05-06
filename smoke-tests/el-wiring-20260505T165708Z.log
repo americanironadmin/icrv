@@ -1,0 +1,167 @@
+ElevenLabs <-> ICRV LLM-proxy wiring verification
+Run timestamp (UTC): 2026-05-05T16:57:08Z
+Run mode:            pre-flight, read-only (no deploys, no remediation)
+
+================================================================
+Phase A — discovery
+================================================================
+icrv-voice URL:    https://icrv-voice.americanironadmin.workers.dev
+LLM proxy path:    POST /llm/v1/chat/completions
+Auth scheme:       Authorization: Bearer <EL_LLM_SHARED_SECRET>
+Auth check site:   workers/icrv-voice/src/index.ts:534
+Default model:     claude-haiku-4-5-20251001  (override via VOICE_LLM_MODEL)
+Health check:      HTTP 200 (https://icrv-voice.americanironadmin.workers.dev/health)
+Worker secrets present:  ANTHROPIC_API_KEY, EL_API_KEY, EL_LLM_SHARED_SECRET, MASTER_KEK, RC_JWT
+Worker secrets missing:  none (EL_AGENT_ID is by design stored per-tenant in KV
+                         at key `el_agent_id:${tenantId}`, not as a worker secret)
+
+================================================================
+Phase D — proxy auth + LLM round-trip (3 tests)
+================================================================
+
+Test 1 — proxy rejects no-auth
+  Request:  POST /llm/v1/chat/completions  (no Authorization header)
+  HTTP:     401
+  Body:     {"error":{"message":"unauthorized","code":"invalid_shared_secret"}}
+  Verdict:  PASS
+
+Test 2 — proxy rejects WRONG shared secret
+  Request:  POST /llm/v1/chat/completions  (Authorization: Bearer wrong-secret-deliberately)
+  HTTP:     401
+  Body:     {"error":{"message":"unauthorized","code":"invalid_shared_secret"}}
+  Verdict:  PASS
+
+Test 3 — proxy accepts CORRECT shared secret + returns real LLM output
+  First attempt (2026-05-05T16:57Z):
+    Request:  POST /llm/v1/chat/completions  (Authorization: Bearer <pasted secret>)
+    HTTP:     401
+    Body:     {"error":{"message":"unauthorized","code":"invalid_shared_secret"}}
+    Verdict:  FAIL — shared-secret mismatch between pasted value and the
+              EL_LLM_SHARED_SECRET then set on the icrv-voice worker.
+  Remediation (2026-05-06):
+    User redeployed worker with `wrangler secret put EL_LLM_SHARED_SECRET`
+    setting it to the run-time value, then `wrangler deploy`.
+    Version ID: f0085638-ab82-4664-9d10-ab9aebf00d72.
+  Re-run (2026-05-06):
+    HTTP:     200
+    Body:     {"id":"msg_01AkDhbN1FMKniAigNyR2tst","object":"chat.completion",
+               "created":1778045745,"model":"claude-haiku-4-5-20251001",
+               "choices":[{"index":0,"message":{"role":"assistant","content":"OK"},
+               "finish_reason":"stop"}],
+               "usage":{"prompt_tokens":17,"completion_tokens":4,"total_tokens":21}}
+    Shape:    OpenAI chat.completion ✓ (id, object, created, model, choices, usage)
+    Content:  choices[0].message.content == "OK"
+    Verdict:  PASS
+
+================================================================
+Phase E — EL agent published config (2 tests)
+================================================================
+
+Test 4 — EL API returns the agent config
+  First attempt (2026-05-05T16:57Z):
+    HTTP:   401
+    Body:   {"detail":{"status":"missing_permissions","message":
+            "The API key you used is missing the permission convai_read
+             to execute this operation."}}
+    Verdict: FAIL — EL_API_KEY lacks `convai_read` scope.
+  Remediation (2026-05-06):
+    User granted `convai_read` to EL_API_KEY in elevenlabs.io → Profile →
+    API Keys, AND published draft agent changes that flipped
+    `prompt.llm` from `glm-45-air-fp8` to `custom-llm` and set
+    `prompt.custom_llm` to point at our worker.
+  Re-run (2026-05-06):
+    HTTP:    200
+    Body:    21,486 bytes of agent JSON (name "Outbound Dialer with
+             Voicemail Handling", agent_id agent_5401kq1w1ecxed28a144qm9btd40)
+    Verdict: PASS
+
+Test 5 — agent's published LLM URL matches our worker
+  Re-run (2026-05-06) — relevant fields from agent config:
+    .conversation_config.agent.prompt.llm                       = "custom-llm"
+    .conversation_config.agent.prompt.custom_llm.url            = "https://icrv-voice.americanironadmin.workers.dev/llm/v1"
+    .conversation_config.agent.prompt.custom_llm.model_id       = "claude-haiku-4-5-20251001"
+    .conversation_config.agent.prompt.custom_llm.api_key.secret_id = "joah3aGjjl325uoTO50I"
+    .conversation_config.agent.prompt.custom_llm.api_type       = "chat_completions"
+    .conversation_config.agent.prompt.backup_llm_config.preference = "override"
+    .conversation_config.agent.prompt.backup_llm_config.order[0]   = "gemini-3.1-pro-preview"
+  URL match vs expected https://icrv-voice.americanironadmin.workers.dev:
+    MATCH at .conversation_config.agent.prompt.custom_llm.url
+  Verdict:   PASS
+
+  Note: a backup LLM (Gemini 3.1 Pro Preview) is configured. If our worker
+  ever times out / 5xx's during a real call, EL will silently fall back to
+  Gemini — the call succeeds but the brain stops being Claude Haiku. During
+  the make-it-real Phase H voice test, watch
+    `wrangler tail --name icrv-voice --format pretty`
+  to confirm hits actually land on our worker rather than the fallback.
+
+================================================================
+Verdict
+================================================================
+Test 1: PASS
+Test 2: PASS
+Test 3: PASS  (after worker redeploy, 2026-05-06; version f0085638)
+Test 4: PASS  (after granting convai_read; 2026-05-06)
+Test 5: PASS  (after publishing agent draft; 2026-05-06)
+
+Overall: READY for Phase H voice test
+  - Proxy side fully wired (icrv-voice accepts shared secret, returns
+    OpenAI-shaped Haiku output).
+  - EL side fully wired (agent published with custom-llm flag, URL pointing
+    at worker, matching shared-secret stored in EL secret store
+    secret_id=joah3aGjjl325uoTO50I).
+  - Caveat: EL agent has Gemini 3.1 Pro Preview as backup LLM; during the
+    real voice test, tail `wrangler tail --name icrv-voice --format pretty`
+    to confirm Claude Haiku is actually serving turns rather than the fallback.
+
+================================================================
+Live in-browser confirmation (2026-05-06)
+================================================================
+After fixing two unrelated EL workspace issues that surfaced when the user
+tried to use the dashboard "Test AI agent" widget:
+  1. Worker secret EL_LLM_SHARED_SECRET re-deployed with
+     wrangler secret put + wrangler deploy
+     (version f0085638-ab82-4664-9d10-ab9aebf00d72).
+  2. EL agent draft published, flipping prompt.llm to "custom-llm" and
+     setting prompt.custom_llm.{url, model_id, api_key.secret_id}.
+  3. EL_API_KEY granted convai_read scope.
+  4. Two stale tool IDs removed from workflow.nodes.live.additional_tool_ids
+     (tool_9301kkcx86fxer2aa9rat2f6n454, tool_3401kpeebhgaee9tarf7wadf4r9e
+     no longer existed in the workspace and were blocking the dashboard
+     test widget with "Documents with ids ... not found").
+The user ran the in-browser conversation test against agent_5401... and
+confirmed: "works fine". Brain wiring is now verified by both API-level
+checks (Tests 1-5) and a live conversational round-trip. Phase H voice
+test is safe to run.
+
+Specific fixes (no remediation performed by this run):
+
+Blocker 1 (Test 3) — EL_LLM_SHARED_SECRET mismatch
+  The value pasted at runtime
+    629c1790…0bdb4
+  is NOT the value currently set as EL_LLM_SHARED_SECRET on the icrv-voice
+  worker. Either:
+    (a) the worker was set with a different value previously and this run's
+        value is the new intended one — to adopt it, run:
+            cd workers/icrv-voice
+            echo "<value>" | wrangler secret put EL_LLM_SHARED_SECRET
+            wrangler deploy
+        AND paste the same value into the EL agent's Custom LLM "API key"
+        field in the EL dashboard, OR
+    (b) the run-time paste was a typo — re-run this prompt with the exact
+        worker value.
+
+Blocker 2 (Test 4) — EL_API_KEY missing convai_read scope
+  Fix: in elevenlabs.io → Profile → API Keys, edit the key (or create a new
+  one) and grant the `convai_read` permission. Replace EL_API_KEY in any
+  callers that read agent configs.
+
+Blocker 3 (Test 5) — cannot verify the agent's published Custom LLM URL
+  Once Blocker 2 is resolved, re-run this prompt. The expected URL stored
+  in the agent's config (likely under conversation_config.agent.prompt.* or
+  platform_settings.custom_llm.* depending on EL API version) must equal:
+    https://icrv-voice.americanironadmin.workers.dev/llm/v1
+  with the matching bearer (the value adopted in Blocker 1).
+
+DO NOT run the make-it-real Phase H voice test until Blockers 1, 2, and 3
+are resolved — the phone would ring and the AI agent would be silent.

@@ -41,10 +41,11 @@ export interface ContactsListResponse {
 export interface BulkUploadResponse {
   job_id: string
   status: 'queued' | 'processing' | 'completed' | 'failed'
-  total_rows: number
-  accepted: number
-  rejected: number
-  errors: { row: number; reason: string }[]
+  total_rows?: number
+  accepted?: number
+  rejected?: number
+  errors?: { row: number; reason: string }[]
+  r2_key?: string
 }
 
 export interface UploadJobStatus {
@@ -56,6 +57,8 @@ export interface UploadJobStatus {
   rejected: number
   errors: { row: number; reason: string }[]
   completed_at?: string
+  created_at?: string
+  updated_at?: string
 }
 
 export const contactsApi = {

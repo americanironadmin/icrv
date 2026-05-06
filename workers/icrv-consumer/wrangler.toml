@@ -55,6 +55,14 @@ max_retries    = 3
 queue          = "icrv-dlq"
 max_batch_size = 25
 max_retries    = 1
+# Phase 1A: bulk-contact import processor. Batch=1 because each message
+# represents an entire CSV file we stream from R2 in 500-row chunks; batching
+# multiple imports together would risk exceeding the worker CPU limit.
+[[queues.consumers]]
+queue              = "icrv-imports"
+max_batch_size     = 1
+max_retries        = 3
+dead_letter_queue  = "icrv-dlq"
 
 [[queues.producers]]
 queue   = "icrv-email-out"
@@ -74,6 +82,9 @@ binding = "Q_VOICE_POSTCALL"
 [[queues.producers]]
 queue   = "icrv-agent-jobs"
 binding = "Q_AGENT"
+[[queues.producers]]
+queue   = "icrv-imports"
+binding = "Q_IMPORT"
 [[queues.producers]]
 queue   = "icrv-retry"
 binding = "Q_RETRY"

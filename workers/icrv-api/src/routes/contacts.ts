@@ -1,9 +1,11 @@
 // workers/icrv-api/src/routes/contacts.ts
 // /v1/contacts — full CRUD + bulk-upload pipeline.
-// Bulk upload writes raw CSV to R2_UPLOADS, creates an upload_jobs row, and
-// processes inline with a strict cap (10k rows per request). For larger jobs
-// the client should split the file. We keep this synchronous because Workers
-// already have a generous CPU budget for streaming CSV parses.
+//
+// Bulk upload (Phase 1A — chunked queue): POST stages the file to
+// R2_UPLOADS/imports/{job_id}.csv, inserts an `import_jobs` row, enqueues a
+// Q_IMPORT message and returns 202 with the job id. icrv-consumer streams the
+// file and processes 500 rows per batch, updating progress in D1. Frontend
+// polls GET /v1/contacts/bulk-upload/{job_id} every 3 seconds.
 
 import { Hono } from 'hono';
 import { uuidv4, nowISO } from '@icrv/shared/crypto';
@@ -243,14 +245,13 @@ export function createContactsRouter(): Hono<HonoCtx> {
   });
 
   // POST /v1/contacts/bulk-upload   (multipart/form-data, field: file)
-  // PR 5 / H6: hard caps to match the client guardrails — Content-Length is
-  // checked first so an oversized request is rejected before we buffer the
-  // body, and the post-parse row count refuses files with too many records.
+  // Phase 1A — chunked queue. Stages to R2, inserts an import_jobs row,
+  // enqueues a Q_IMPORT message, returns 202. icrv-consumer does the heavy
+  // lifting in 500-row batches. Caller polls GET /bulk-upload/:jobId.
   app.post('/bulk-upload', async (c) => {
     if (c.get('user_role') === 'viewer') return c.json({ error: 'forbidden' }, 403);
 
-    const MAX_BYTES = 10 * 1024 * 1024;
-    const MAX_ROWS  = 50_000;
+    const MAX_BYTES = 25 * 1024 * 1024; // 25MB — chunked queue makes this safe.
     const declaredLen = Number.parseInt(c.req.header('Content-Length') ?? '0', 10);
     if (declaredLen > MAX_BYTES) {
       return c.json({ error: 'file_too_large', max_bytes: MAX_BYTES }, 413);
@@ -266,78 +267,39 @@ export function createContactsRouter(): Hono<HonoCtx> {
     const jobId    = uuidv4();
     const now      = nowISO();
 
-    const csvText = await file.text();
-    const r2Path  = `tenants/${tenantId}/uploads/${jobId}.csv`;
-    await c.env.R2_UPLOADS.put(r2Path, csvText, { httpMetadata: { contentType: 'text/csv' } });
+    // Stream the body straight to R2 to avoid buffering the whole file in
+    // worker memory. R2.put() supports ReadableStream.
+    const r2Key = `imports/${tenantId}/${jobId}.csv`;
+    await c.env.R2_UPLOADS.put(r2Key, file.stream(), {
+      httpMetadata: { contentType: 'text/csv' },
+      customMetadata: { tenant_id: tenantId, user_id: userId, job_id: jobId },
+    });
 
     await c.env.DB.prepare(
-      `INSERT INTO upload_jobs (id, tenant_id, user_id, source_uri, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
-    ).bind(jobId, tenantId, userId, r2Path, now, now).run();
+      `INSERT INTO import_jobs (id, tenant_id, user_id, status, r2_key, filename, size_bytes, created_at, updated_at)
+       VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+    ).bind(jobId, tenantId, userId, r2Key, (file as File).name ?? null, file.size ?? 0, now, now).run();
 
-    // Inline CSV parse — supports quoted fields and embedded commas.
-    const { rows, headers } = parseCsv(csvText);
-    if (rows.length > MAX_ROWS) {
+    if (c.env.Q_IMPORT) {
+      await c.env.Q_IMPORT.send({
+        id:          uuidv4(),
+        type:        'import_job',
+        tenant_id:   tenantId,
+        user_id:     userId,
+        job_id:      jobId,
+        r2_key:      r2Key,
+        attempt:     1,
+        enqueued_at: now,
+      });
+    } else {
+      // Consumer not configured — fail closed and surface why.
       await c.env.DB.prepare(
-        `UPDATE upload_jobs SET status='failed', errors_json=?, updated_at=?, completed_at=? WHERE id=?`,
-      ).bind(JSON.stringify([{ row: 0, reason: `too_many_rows_max_${MAX_ROWS}` }]), nowISO(), nowISO(), jobId).run();
-      return c.json({ error: 'too_many_rows', max_rows: MAX_ROWS, got: rows.length }, 413);
-    }
-    const requiredHeaders = ['name'];
-    for (const h of requiredHeaders) {
-      if (!headers.includes(h)) {
-        await c.env.DB.prepare(
-          `UPDATE upload_jobs SET status='failed', errors_json=?, updated_at=?, completed_at=? WHERE id=?`,
-        ).bind(JSON.stringify([{ row: 0, reason: `missing_header:${h}` }]), nowISO(), nowISO(), jobId).run();
-        return c.json({ error: `missing_header:${h}` }, 400);
-      }
+        `UPDATE import_jobs SET status='failed', errors_json=?, updated_at=? WHERE id=?`,
+      ).bind(JSON.stringify([{ row: 0, reason: 'queue_not_bound' }]), now, jobId).run();
+      return c.json({ error: 'queue_not_bound' }, 500);
     }
 
-    const errors: Array<{ row: number; reason: string }> = [];
-    let accepted = 0, rejected = 0;
-    const total = rows.length;
-
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      try {
-        const name = r.name?.trim();
-        if (!name) throw new Error('name_required');
-        const email = r.email?.trim() || null;
-        const phone = r.phone?.trim() || null;
-        const wa    = r.whatsapp_phone?.trim() || null;
-        if (email && !EMAIL.test(email)) throw new Error('email_invalid');
-        if (phone && !E164.test(phone)) throw new Error('phone_must_be_e164');
-        if (wa && !E164.test(wa))       throw new Error('whatsapp_phone_must_be_e164');
-
-        const cid = uuidv4();
-        await c.env.DB.prepare(
-          `INSERT INTO contacts (id, tenant_id, name, email, phone_e164, whatsapp_phone_e164, tags_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(
-          cid, tenantId, name, email, phone, wa,
-          r.tags ? JSON.stringify(r.tags.split('|').map(s => s.trim()).filter(Boolean)) : null,
-          nowISO(), nowISO(),
-        ).run();
-
-        await upsertConsents(c.env.DB, tenantId, cid, {
-          email:    r.consent_email    ? truthy(r.consent_email)    : undefined,
-          whatsapp: r.consent_whatsapp ? truthy(r.consent_whatsapp) : undefined,
-          voice:    r.consent_voice    ? truthy(r.consent_voice)    : undefined,
-        }, nowISO());
-        accepted++;
-      } catch (err) {
-        rejected++;
-        errors.push({ row: i + 2, reason: (err as Error).message }); // +2 because row 1 is header
-      }
-    }
-
-    await c.env.DB.prepare(
-      `UPDATE upload_jobs SET status='completed', total_rows=?, processed=?, accepted=?, rejected=?,
-                              errors_json=?, updated_at=?, completed_at=?
-       WHERE id=?`,
-    ).bind(total, total, accepted, rejected, JSON.stringify(errors.slice(0, 100)), nowISO(), nowISO(), jobId).run();
-
-    return c.json({ job_id: jobId, status: 'completed', total_rows: total, accepted, rejected, errors: errors.slice(0, 50) });
+    return c.json({ job_id: jobId, status: 'queued', r2_key: r2Key }, 202);
   });
 
   // GET /v1/contacts/bulk-upload/:jobId
@@ -345,77 +307,24 @@ export function createContactsRouter(): Hono<HonoCtx> {
     const tenantId = c.get('tenant_id');
     const jobId = c.req.param('jobId');
     const row = await c.env.DB.prepare(
-      `SELECT id, status, total_rows, processed, accepted, rejected, errors_json, completed_at
-       FROM upload_jobs WHERE id = ? AND tenant_id = ?`,
+      `SELECT id, status, total_rows, processed_rows, accepted, rejected,
+              errors_json, completed_at, created_at, updated_at
+       FROM import_jobs WHERE id = ? AND tenant_id = ?`,
     ).bind(jobId, tenantId).first<{
-      id: string; status: string; total_rows: number; processed: number;
-      accepted: number; rejected: number; errors_json?: string; completed_at?: string;
+      id: string; status: string; total_rows: number; processed_rows: number;
+      accepted: number; rejected: number; errors_json?: string;
+      completed_at?: string; created_at: string; updated_at: string;
     }>();
     if (!row) return c.json({ error: 'not_found' }, 404);
     return c.json({
       job_id: row.id, status: row.status,
-      total_rows: row.total_rows, processed: row.processed,
+      total_rows: row.total_rows, processed: row.processed_rows,
       accepted: row.accepted, rejected: row.rejected,
       errors: row.errors_json ? JSON.parse(row.errors_json) : [],
       completed_at: row.completed_at,
+      created_at: row.created_at, updated_at: row.updated_at,
     });
   });
 
   return app;
-}
-
-// ─── CSV parser (RFC-4180 light) ─────────────────────────────────────────────
-
-function parseCsv(text: string): { rows: Record<string, string>[]; headers: string[] } {
-  const lines = splitCsvLines(text);
-  if (lines.length === 0) return { rows: [], headers: [] };
-  const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
-  const rows: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const cells = parseCsvLine(lines[i]);
-    const row: Record<string, string> = {};
-    for (let j = 0; j < headers.length; j++) row[headers[j]] = (cells[j] ?? '').trim();
-    rows.push(row);
-  }
-  return { rows, headers };
-}
-
-function splitCsvLines(text: string): string[] {
-  const out: string[] = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '"') { inQ = !inQ; cur += ch; continue; }
-    if ((ch === '\n' || ch === '\r') && !inQ) {
-      if (ch === '\r' && text[i+1] === '\n') i++;
-      out.push(cur); cur = ''; continue;
-    }
-    cur += ch;
-  }
-  if (cur.length) out.push(cur);
-  return out;
-}
-
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQ) {
-      if (ch === '"' && line[i+1] === '"') { cur += '"'; i++; }
-      else if (ch === '"') { inQ = false; }
-      else { cur += ch; }
-    } else {
-      if (ch === ',') { out.push(cur); cur = ''; }
-      else if (ch === '"') { inQ = true; }
-      else { cur += ch; }
-    }
-  }
-  out.push(cur);
-  return out;
-}
-
-function truthy(v: string): boolean {
-  return /^(1|true|yes|y|granted)$/i.test(v.trim());
 }

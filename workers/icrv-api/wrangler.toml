@@ -80,6 +80,9 @@ binding = "Q_VOICE_POSTCALL"
 queue   = "icrv-agent-jobs"
 binding = "Q_AGENT"
 [[queues.producers]]
+queue   = "icrv-imports"
+binding = "Q_IMPORT"
+[[queues.producers]]
 queue   = "icrv-retry"
 binding = "Q_RETRY"
 [[queues.producers]]

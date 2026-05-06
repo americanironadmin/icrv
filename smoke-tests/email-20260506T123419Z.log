@@ -1,0 +1,84 @@
+[api]    
+[api]     ⛅️ wrangler 4.75.0 (update available 4.88.0)
+[api]    ─────────────────────────────────────────────
+[api]    Successfully created tail, expires at 2026-05-06T21:46:32Z
+[api]    Connected to icrv-api, waiting for logs...
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:26:34 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:26:34 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:26:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:26:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:26:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:27:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:27:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:27:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:28:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:28:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:28:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:29:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:29:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/campaigns?per_page=50 - Ok @ 5/6/2026, 12:29:09 PM
+[api]    GET https://icrv-api.americanironus.com/v1/templates?channel=email - Ok @ 5/6/2026, 12:29:13 PM
+[api]    GET https://icrv-api.americanironus.com/v1/admin/integrations - Ok @ 5/6/2026, 12:29:13 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:29:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:29:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:29:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6[api]    
+[api]     ⛅️ wrangler 4.75.0 (update available 4.88.0)
+[api]    ─────────────────────────────────────────────
+[api]    Successfully created tail, expires at 2026-05-06T21:46:32Z
+[api]    Connected to icrv-api, waiting for logs...
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:27:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:27:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:27:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:27:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:27:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:20 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:28:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:28:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:35 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:28:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:28:50 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:28:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs?limit=50 - Ok @ 5/6/2026, 12:29:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls/runs/pending - Ok @ 5/6/2026, 12:29:05 PM
+[api]    GET https://icrv-api.americanironus.com/v1/campaigns?per_page=50 - Ok @ 5/6/2026, 12:29:09 PM
+[api]    GET https://icrv-api.americanironus.com/v1/templates?channel=email - Ok @ 5/6/2026, 12:29:13 PM
+[api]    GET https://icrv-api.americanironus.com/v1/admin/integrations - Ok @ 5/6/2026, 12:29:13 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:29:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:29:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:29:55 PM
+[api]    GET https://icrv-api.americanironus.com/v1/dashboard/status - Ok @ 5/6/2026, 12:30:25 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:30:25 PM
+[api]    GET http://do/token - Ok @ 5/6/2026, 12:30:45 PM
+[api]    POST https://icrv-api.americanironus.com/v1/templates - Ok @ 5/6/2026, 12:30:46 PM
+[api]    POST https://icrv-api.americanironus.com/v1/campaigns - Ok @ 5/6/2026, 12:30:47 PM
+[api]    GET https://icrv-api.americanironus.com/v1/campaigns?per_page=50 - Ok @ 5/6/2026, 12:30:47 PM
+[api]    GET https://icrv-api.americanironus.com/v1/agent-controls - Ok @ 5/6/2026, 12:30:55 PM
+[api]    POST http://do/can-send - Ok @ 5/6/2026, 12:31:03 PM
+[api]    POST http://do/can-send - Ok @ 5/6/2026, 12:31:04 PM
+[api]    POST http://do/can-send - Ok @ 5/6/2026, 12:31:05 PM
+[api]    PO

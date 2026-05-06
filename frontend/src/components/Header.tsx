@@ -29,6 +29,16 @@ export default function Header() {
   const { user, agentControls } = useApp()
   const agentActive = isAgentActive(agentControls)
   const [services, setServices] = useState<ApiStatus[]>([])
+  const [theme, setTheme] = useState<'dark' | 'light'>(
+    (document.documentElement.getAttribute('data-theme') as 'dark' | 'light') ?? 'dark'
+  )
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    document.documentElement.setAttribute('data-theme', next)
+    localStorage.setItem('icrv_theme', next)
+    setTheme(next)
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -174,6 +184,15 @@ export default function Header() {
             {user?.role?.toUpperCase() ?? 'USER'}
           </div>
         </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {theme === 'dark' ? '☀' : '☾'}
+        </button>
         <button
           className="btn btn-ghost btn-sm"
           onClick={logout}
