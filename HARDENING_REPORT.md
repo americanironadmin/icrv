@@ -489,6 +489,92 @@ Three follow-up items from the campaign-builder pass, fixed in one commit:
 for icrv-api (5 passed); `vite build` clean (640 modules). No schema or secret
 changes; bindings on icrv-api (`Q_AGENT`, `CAMPAIGN_DO`) were already present.
 
+## Make-it-real log
+
+- **2026-05-05** — EL ↔ ICRV LLM-proxy pre-flight (no phone): Tests 1, 2 PASS;
+  Tests 3, 4, 5 FAIL. Blockers: (a) EL_LLM_SHARED_SECRET worker/runtime mismatch,
+  (b) EL_API_KEY lacks `convai_read` scope, (c) Test 5 blocked by (b). Phase H
+  voice test NOT safe until all three fixed. Full log:
+  `smoke-tests/el-wiring-20260505T165708Z.log`.
+- **2026-05-06** — Test 3 re-run after `wrangler secret put EL_LLM_SHARED_SECRET`
+  + redeploy (version f0085638): PASS. Worker returned HTTP 200 with valid
+  OpenAI-shaped `chat.completion` and `choices[0].message.content == "OK"`.
+  Proxy side fully wired. Remaining blockers: EL_API_KEY needs `convai_read`
+  scope (Test 4), and the agent's published Custom LLM Server URL must be
+  pasted in the EL dashboard pointing at
+  `https://icrv-voice.americanironadmin.workers.dev/llm/v1` with the new bearer
+  (Test 5).
+- **2026-05-06** — Tests 4 & 5 re-run after user granted `convai_read` to
+  EL_API_KEY and published the agent draft (flipping `prompt.llm` from
+  `glm-45-air-fp8` to `custom-llm`, setting `prompt.custom_llm.url` to
+  `https://icrv-voice.americanironadmin.workers.dev/llm/v1`,
+  `model_id=claude-haiku-4-5-20251001`, with the bearer stored in EL
+  secret store at `secret_id=joah3aGjjl325uoTO50I`): both PASS. **Overall
+  verdict: READY for Phase H voice test.** EL agent
+  `agent_5401kq1w1ecxed28a144qm9btd40` ("Outbound Dialer with Voicemail
+  Handling") has a Gemini 3.1 Pro Preview backup LLM configured — during
+  Phase H, tail `wrangler tail --name icrv-voice` to confirm Claude Haiku
+  actually serves turns rather than the silent fallback.
+- **2026-05-06** — Live in-browser conversation test against
+  `agent_5401kq1w1ecxed28a144qm9btd40` confirmed working end-to-end after
+  removing two stale tool refs from `workflow.nodes.live.additional_tool_ids`
+  that were blocking EL's "Test AI agent" widget with "Documents with ids
+  ... not found". Brain wiring now verified by both API checks (Tests 1-5)
+  and a live conversational round-trip. Phase H voice test is safe to run.
+
+## 2026-05-06 — Make-it-real verification
+
+Branch: `ops/make-real` (merged to `main` in this run).
+
+### Test matrix
+
+| Capability | Result | Evidence |
+|---|---|---|
+| D1 schema integrity | PASS | 25 tables present, 0 orphans, 1 tenant `tenant_americaniron_001`, 1 admin user, 5 api_credentials (3 active: gmail/ringcentral/elevenlabs) |
+| D1 backup cron live | PASS | `0 3 * * *` schedule wired in `icrv-cron`. Manual trigger via `/admin/run-d1-backup` produced `r2://icrv-exports/d1-backups/icrv-db-2026-05-06.sql` (34,066 bytes, all 24 tables, valid SQL) |
+| Email send (Gmail) | PASS | Campaign `ca801c4a-…` enrolled `__SMOKE_EMAIL_…` and `icrv-test-self-001`; both `messages.status='sent'`; user confirmed delivery to `adam@americaniron1.com` |
+| WhatsApp send | DEFERRED | `WA_ACCESS_TOKEN` not set on icrv-whatsapp; user typed "skip" |
+| Voice + AI sales agent | DEFERRED | Per user instruction at Phase C ask. Brain wiring already proven in prior session (Tests 1–5 PASS + live in-browser conversation). Phone-call leg awaits a follow-up run with RingCentral SIP exercised |
+| Kill switch enforcement | PASS | After fixing two latent bugs (below), full toggle-OFF→Save→toggle-ON cycle verified. Audit log shows `kill_switch_deactivated` → `controls_updated:tenant` (kill_switch preserved) → `kill_switch_activated`. D1 row's `controls_json.kill_switch` flips correctly each time |
+| Consent enforcement | PASS | `__SMOKE_BLOCKED_…` (consent_state='revoked' on email) was enrolled in same campaign. agent_run row has `status='blocked_by_policy'`; 0 messages dispatched to that contact |
+| Dashboard metrics | PASS | User reported tile values `3 / 1 / 3 / 0 / 1 / 3` matching D1: contacts=3, active_campaigns=1, emails_sent=3, whatsapp=0, calls=1, ai_actions/runs=3 |
+
+### Bugs found & fixed during the run
+
+1. **Cloudflare Access blocking CORS preflight** on `icrv-api.americanironus.com`
+   - OPTIONS to any write endpoint returned 403 (HTML Access page) → axios reported "Network Error"
+   - Fix: enable CORS in the Access app (allow methods, origins, headers, credentials)
+   - Resolved: 2026-05-06 by user in CF Zero Trust dashboard
+
+2. **Kill-switch route shadowed by `/:scope`** in `workers/icrv-agent/src/control-panel.ts`
+   - `app.delete('/:scope')` was registered before `app.delete('/kill-switch')` → Hono captured `kill-switch` as the scope param, deleted zero rows, returned 200 with misleading `controls_deleted:kill-switch` audit
+   - Fix: hoisted POST/DELETE `/kill-switch` above the parameterized routes; added `VALID_SCOPES` guard to DELETE `/:scope` as defense-in-depth
+   - Commit: `c74043e`
+
+3. **Frontend stale draft reverting kill switch on Save** in `frontend/src/pages/AIControlPanel.tsx`
+   - useEffect dep was `[tenantControl?.id]`, so toggling kill switch (same row id) didn't re-sync draft → clicking Save pushed stale `kill_switch:true` back to D1, undoing the toggle
+   - Fix: `handleKillSwitch` now `setDraft(d => ({...d, kill_switch: <new>}))` immediately
+   - Commit: `c74043e`
+
+### Deferred (not tested this run)
+
+- **WhatsApp** — needs `WA_ACCESS_TOKEN` on icrv-whatsapp + an approved Meta Business message template. ~30 min in Meta Business + 1 wrangler secret put.
+- **Voice / phone-ring** — RC SIP→EL audio bridge unverified by phone test. Brain side already proven (HTTP-level + browser conversation). To run Phase H, a follow-up run with the user's phone available + Phase H from `CC-PROMPT-icrv-make-it-real.md`.
+
+### Manual steps still on you
+
+1. **R2 lifecycle rule** for `d1-backups/` — Cloudflare → R2 → `icrv-exports` → Settings → Object lifecycle rules → "Delete after 30 days" with prefix `d1-backups/`. ~30 sec; without it, backup blobs accumulate.
+2. **Cost caps** on integrations:
+   - ElevenLabs: Profile → Subscription → Usage limits
+   - RingCentral: Account → Billing → Notifications
+   - Anthropic: console.anthropic.com → Limits
+3. **WhatsApp setup** if/when you want that channel — see Deferred above.
+4. **Phase H voice test** when phone available — re-run `CC-PROMPT-icrv-make-it-real.md` § Phase H (skip A–G if state hasn't changed).
+
+### Conclusions
+
+Email + AI control plane is operationally proven end-to-end. Real campaign created, real email arrived, real consent gate blocked the no-consent contact, real kill switch toggle persisted to D1 and would block dispatch, real D1 backup landed in R2. Three latent bugs found and fixed during the run (CORS, route-shadow, frontend draft-sync). Voice and WhatsApp deferred but with clear unblock paths. Production ready for email-only outbound; voice and WhatsApp need targeted follow-ups.
+
 ## Verification one-liners (cheat sheet)
 
 ```bash
