@@ -179,7 +179,7 @@ export default function App() {
             <Route path="/ai"          element={<RouteErrorBoundary routeLabel="AI CONTROL"><AIControlPanel /></RouteErrorBoundary>} />
             <Route path="/logs"        element={<RouteErrorBoundary routeLabel="ACTIVITY LOGS"><ActivityLogs /></RouteErrorBoundary>} />
             <Route path="/calls"       element={<RouteErrorBoundary routeLabel="CALL MONITORING"><CallMonitoring /></RouteErrorBoundary>} />
-            <Route path="/settings"    element={<RouteErrorBoundary routeLabel="SETTINGS"><Settings /></RouteErrorBoundary>} />
+            <Route path="/settings/*"  element={<RouteErrorBoundary routeLabel="SETTINGS"><Settings /></RouteErrorBoundary>} />
             <Route path="*"            element={<NotFound />} />
           </Routes>
         </main>

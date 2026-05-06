@@ -74,6 +74,26 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
     throw new Error('action_revoked');
   }
 
+  // ── Phase 2: CAN-SPAM physical address gate + daily limit ────────────
+  const settings = await loadTenantSettings(env, p.tenant_id);
+  const street   = (settings.compliance.physical_address?.street ?? '').trim();
+  if (!street || street === '__PLACEHOLDER__') {
+    await env.DB.prepare(`UPDATE messages SET status='failed', error='compliance_address_missing', updated_at=? WHERE id=?`)
+      .bind(nowISO(), p.message_id).run();
+    throw new Error('compliance_address_missing');
+  }
+
+  // Daily-limit gate (UTC day window).
+  const dailyLimit = Number(settings.sending.daily_limit ?? 500);
+  const sentToday = (await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM messages
+       WHERE tenant_id = ? AND channel = 'email' AND direction = 'outbound'
+         AND sent_at >= datetime('now','start of day')`,
+  ).bind(p.tenant_id).first<{ n: number }>())?.n ?? 0;
+  if (sentToday >= dailyLimit) {
+    throw new Error(`daily_limit_reached:${dailyLimit}`);
+  }
+
   // Get access token from OAuthRotatorDO
   const stub = env.OAUTH_DO.get(env.OAUTH_DO.idFromName(p.oauth_token_id));
   const tokRes = await stub.fetch('http://do/token', {
@@ -85,9 +105,14 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
 
   // Rewrite tracking links + add open pixel + List-Unsubscribe
   const unsubToken = await ensureUnsubToken(env, p);
-  const htmlBody   = injectTracking(p.html_body, p.message_id, p.tracking_domain);
+  const trackingHost = p.tracking_domain || 'icrv-api.americanironus.com';
+  const unsubUrl = `https://${trackingHost}/u/${unsubToken}`;
+  const htmlBody = appendCanSpamFooter(
+    injectTracking(p.html_body, p.message_id, trackingHost),
+    settings, unsubUrl,
+  );
   const headersExtra: string[] = [
-    `List-Unsubscribe: <https://${p.tracking_domain}/u/${unsubToken}>, <mailto:unsubscribe@${p.tracking_domain}?subject=unsubscribe>`,
+    `List-Unsubscribe: <${unsubUrl}>, <mailto:unsubscribe@${trackingHost}?subject=unsubscribe>`,
     'List-Unsubscribe-Post: List-Unsubscribe=One-Click',
   ];
 
@@ -205,4 +230,55 @@ function stripHtml(html: string): string {
              .replace(/<[^>]+>/g, ' ')
              .replace(/&nbsp;/g, ' ')
              .replace(/\s+/g, ' ').trim();
+}
+
+// ─── Tenant settings (Phase 2) ─────────────────────────────────────────────
+
+interface TenantSettingsView {
+  workspace:  Record<string, unknown> & { company_name?: string };
+  compliance: Record<string, unknown> & {
+    physical_address?: { street?: string; city?: string; state?: string; zip?: string; country?: string };
+    unsubscribe_text?: string;
+  };
+  sending:    Record<string, unknown> & { daily_limit?: number; throttle_per_sec?: number };
+}
+
+async function loadTenantSettings(env: EmailEnv, tenantId: string): Promise<TenantSettingsView> {
+  const row = await env.DB.prepare(
+    `SELECT workspace_json, compliance_json, sending_json
+       FROM tenant_settings WHERE tenant_id = ?`,
+  ).bind(tenantId).first<{ workspace_json: string; compliance_json: string; sending_json: string }>();
+  const safe = (s?: string): Record<string, unknown> => {
+    if (!s) return {};
+    try { return JSON.parse(s); } catch { return {}; }
+  };
+  return {
+    workspace:  safe(row?.workspace_json),
+    compliance: safe(row?.compliance_json),
+    sending:    safe(row?.sending_json),
+  };
+}
+
+function appendCanSpamFooter(html: string, settings: TenantSettingsView, unsubUrl: string): string {
+  const company = (settings.workspace.company_name as string | undefined) ?? '';
+  const a = settings.compliance.physical_address ?? {};
+  const addrLine = [a.street, a.city, a.state, a.zip, a.country].filter(Boolean).join(', ');
+  const tpl = (settings.compliance.unsubscribe_text as string | undefined)
+              ?? 'To stop receiving these emails, unsubscribe here: {{unsubscribe_url}}';
+  const unsubText = tpl.replace(/\{\{unsubscribe_url\}\}/g, unsubUrl);
+
+  const footer = `
+<hr style="margin:24px 0;border:0;border-top:1px solid #ddd" />
+<div style="font-size:12px;color:#6b7280;font-family:Arial,sans-serif;line-height:1.5">
+  <div>${escapeHtml(company)}${company && addrLine ? ' · ' : ''}${escapeHtml(addrLine)}</div>
+  <div style="margin-top:6px">${escapeHtml(unsubText.replace(unsubUrl, ''))}<a href="${unsubUrl}" style="color:#2563eb">Unsubscribe</a></div>
+</div>`;
+
+  if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${footer}</body>`);
+  return html + footer;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
