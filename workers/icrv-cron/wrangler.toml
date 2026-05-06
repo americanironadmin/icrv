@@ -9,6 +9,9 @@ HOOKS_BASE_URL    = "https://hooks.icrv.app"
 RC_CREDENTIAL_IDS = ""
 VOICE_LLM_MODEL      = "claude-haiku-4-5-20251001"
 VOICE_LLM_MAX_TOKENS = "512"
+# D1 backup target (CF_API_TOKEN is a secret — set with: wrangler secret put CF_API_TOKEN)
+CF_ACCOUNT_ID  = "1c07214c662a877a6d09d597d5f4a461"
+D1_DATABASE_ID = "fdf24661-6675-4570-b1b7-f2b672cad4bf"
 
 [triggers]
 crons = ["* * * * *", "*/5 * * * *", "0 * * * *", "0 3 * * *"]

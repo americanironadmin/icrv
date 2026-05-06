@@ -13,6 +13,10 @@ export interface CronEnv extends BaseEnv {
   ANTHROPIC_API_KEY:    string;
   VOICE_LLM_MODEL:      string;
   VOICE_LLM_MAX_TOKENS: string;
+  // ── D1 backup (Cloudflare D1 export API → R2_EXPORTS)
+  CF_API_TOKEN:   string;   // secret; scopes: D1 Edit + R2 Edit
+  CF_ACCOUNT_ID:  string;   // var
+  D1_DATABASE_ID: string;   // var
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -307,11 +311,125 @@ async function runNightlyMaintenance(env: CronEnv): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Cron 4b: Daily D1 backup → R2_EXPORTS (also runs on 0 3 * * *)
+// Uses Cloudflare D1 export API (output_format=polling) → SQL dump → R2.
+// Retention: handled by an R2 lifecycle rule on icrv-exports (manual setup).
+// Failure surface: writes last_d1_backup_status to KV_TRACK for operator view.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function runD1Backup(env: CronEnv): Promise<void> {
+  const { CF_API_TOKEN, CF_ACCOUNT_ID, D1_DATABASE_ID } = env;
+
+  if (!CF_API_TOKEN || !CF_ACCOUNT_ID || !D1_DATABASE_ID) {
+    console.error('[cron] D1 backup: missing CF_API_TOKEN/CF_ACCOUNT_ID/D1_DATABASE_ID');
+    await env.KV_TRACK.put('last_d1_backup_status', JSON.stringify({
+      ok: false, ts: nowISO(), reason: 'missing_config',
+    }));
+    return;
+  }
+
+  const dateKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const r2Key = `d1-backups/icrv-db-${dateKey}.sql`;
+  const exportUrl = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${D1_DATABASE_ID}/export`;
+  const headers = {
+    Authorization: `Bearer ${CF_API_TOKEN}`,
+    'Content-Type': 'application/json',
+  };
+
+  type ExportResponse = {
+    success?: boolean;
+    errors?: { code: number; message: string }[];
+    result?: {
+      at_bookmark?: string;
+      status?: string;
+      result?: { filename?: string; signed_url?: string };
+      messages?: string[];
+    };
+  };
+
+  try {
+    let bookmark: string | undefined;
+    let signedUrl: string | undefined;
+    const start = Date.now();
+    const TIMEOUT_MS = 5 * 60 * 1000;
+
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if (Date.now() - start > TIMEOUT_MS) {
+        throw new Error('export polling timed out after 5min');
+      }
+
+      const body: Record<string, unknown> = { output_format: 'polling' };
+      if (bookmark) body.current_bookmark = bookmark;
+
+      const res = await fetch(exportUrl, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (!res.ok) {
+        throw new Error(`export call ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      }
+      const payload = await res.json() as ExportResponse;
+      if (!payload.success) {
+        throw new Error(`export error: ${JSON.stringify(payload.errors ?? payload)}`);
+      }
+
+      const result = payload.result ?? {};
+      signedUrl = result.result?.signed_url;
+      if (signedUrl) break;
+
+      if (result.at_bookmark) bookmark = result.at_bookmark;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+
+    if (!signedUrl) throw new Error('export polling completed without a signed_url');
+
+    const dumpRes = await fetch(signedUrl);
+    if (!dumpRes.ok) throw new Error(`download dump ${dumpRes.status}`);
+    const dumpBody = await dumpRes.arrayBuffer();
+    if (dumpBody.byteLength === 0) throw new Error('downloaded dump is empty');
+
+    await env.R2_EXPORTS.put(r2Key, dumpBody, {
+      httpMetadata: { contentType: 'application/sql' },
+      customMetadata: { 'export-date': dateKey, source: 'icrv-cron' },
+    });
+
+    console.log(`[cron] D1 backup OK: ${r2Key} (${dumpBody.byteLength} bytes)`);
+    await env.KV_TRACK.put('last_d1_backup_status', JSON.stringify({
+      ok: true, ts: nowISO(), key: r2Key, bytes: dumpBody.byteLength,
+    }));
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error('[cron] D1 backup failed:', reason);
+    await env.KV_TRACK.put('last_d1_backup_status', JSON.stringify({
+      ok: false, ts: nowISO(), reason,
+    }));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Scheduled handler dispatcher
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(): Promise<Response> {
+  async fetch(req: Request, env: CronEnv, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(req.url);
+    if (url.pathname === '/admin/run-d1-backup' && req.method === 'POST') {
+      const auth = req.headers.get('authorization') ?? '';
+      if (!env.CF_API_TOKEN || auth !== `Bearer ${env.CF_API_TOKEN}`) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      ctx.waitUntil(runD1Backup(env));
+      return new Response(JSON.stringify({ ok: true, msg: 'backup started' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.pathname === '/admin/last-d1-backup-status') {
+      const auth = req.headers.get('authorization') ?? '';
+      if (!env.CF_API_TOKEN || auth !== `Bearer ${env.CF_API_TOKEN}`) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      const status = await env.KV_TRACK.get('last_d1_backup_status');
+      return new Response(status ?? '{"ok":null,"reason":"never_run"}', {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     return new Response('icrv-cron — scheduled worker only', { status: 404 });
   },
 
@@ -328,7 +446,10 @@ export default {
           } else if (cron === '0 * * * *') {
             await runRateWindowRoll(env);
           } else if (cron === '0 3 * * *') {
-            await runNightlyMaintenance(env);
+            await Promise.allSettled([
+              runNightlyMaintenance(env),
+              runD1Backup(env),
+            ]);
           } else {
             console.warn(`[cron] unknown cron expression: ${cron}`);
           }

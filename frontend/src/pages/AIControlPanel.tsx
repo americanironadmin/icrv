@@ -398,9 +398,11 @@ export default function AIControlPanel() {
     try {
       if (agentActive) {
         await agentApi.activateKillSwitch({ scope: 'tenant', reason })
+        setDraft((d) => ({ ...d, kill_switch: true }))
         showToast({ type: 'warning', title: 'Kill switch activated — agent halted' })
       } else {
         await agentApi.deactivateKillSwitch('tenant')
+        setDraft((d) => ({ ...d, kill_switch: false }))
         showToast({ type: 'success', title: 'Kill switch cleared — agent active' })
       }
       refreshAgentControls()

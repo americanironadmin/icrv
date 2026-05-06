@@ -176,6 +176,98 @@ export function createControlPanelRouter(): Hono<HonoCtx> {
     });
   });
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // KILL SWITCH
+  // Registered before /:scope handlers so the static path wins route matching.
+  // (When `app.delete('/:scope')` is registered first, Hono captures
+  // /kill-switch as scope='kill-switch', deletes zero rows, and returns 200 —
+  // a silent failure that surfaces as "UI says enabled, D1 still has
+  // kill_switch=true". Bug discovered during the 2026-05-06 make-it-real run.)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  app.post('/kill-switch', async (c) => {
+    const userRole = c.get('user_role');
+    if (!['admin', 'operator'].includes(userRole)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+
+    const body = await c.req.json<{
+      scope:        ControlScope;
+      campaign_id?: string;
+      contact_id?:  string;
+      reason?:      string;
+    }>();
+
+    if (!VALID_SCOPES.includes(body.scope)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+
+    const tenantId  = c.get('tenant_id');
+    const userId    = c.get('user_id');
+    const now       = nowISO();
+    const controlId = uuidv4();
+
+    const killPayload = JSON.stringify({ kill_switch: true });
+
+    await c.env.DB.prepare(
+      `INSERT INTO agent_controls
+         (id, tenant_id, scope, campaign_id, contact_id, controls_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (tenant_id, scope, COALESCE(campaign_id,''), COALESCE(contact_id,''))
+       DO UPDATE SET controls_json=json_patch(controls_json, '{"kill_switch":true}'), updated_at=excluded.updated_at`,
+    ).bind(
+      controlId, tenantId, body.scope,
+      body.campaign_id ?? null, body.contact_id ?? null,
+      killPayload, now, now,
+    ).run();
+
+    await c.env.KV_CONFIG.put(
+      `kill_switch:${tenantId}:${body.scope}:${body.campaign_id ?? ''}:${body.contact_id ?? ''}`,
+      '1',
+      { expirationTtl: 7 * 86400 },
+    );
+
+    await writeAudit(c.env, tenantId, userId, 'kill_switch_activated',
+      `${body.scope}:${body.campaign_id ?? ''}:${body.contact_id ?? ''}`,
+      { reason: body.reason, user_id: userId });
+
+    return c.json({ ok: true, kill_switch: true, scope: body.scope });
+  });
+
+  app.delete('/kill-switch', async (c) => {
+    const userRole = c.get('user_role');
+    if (!['admin', 'operator'].includes(userRole)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+
+    const { scope, campaign_id, contact_id } = c.req.query() as {
+      scope: ControlScope; campaign_id?: string; contact_id?: string;
+    };
+
+    if (!VALID_SCOPES.includes(scope)) return c.json({ error: 'invalid_scope' }, 400);
+
+    const tenantId = c.get('tenant_id');
+    const userId   = c.get('user_id');
+    const now      = nowISO();
+
+    await c.env.DB.prepare(
+      `UPDATE agent_controls
+       SET controls_json=json_patch(controls_json, '{"kill_switch":false}'), updated_at=?
+       WHERE tenant_id=? AND scope=?
+         AND COALESCE(campaign_id,'')=?
+         AND COALESCE(contact_id,'')=?`,
+    ).bind(now, tenantId, scope, campaign_id ?? '', contact_id ?? '').run();
+
+    await c.env.KV_CONFIG.delete(
+      `kill_switch:${tenantId}:${scope}:${campaign_id ?? ''}:${contact_id ?? ''}`,
+    );
+
+    await writeAudit(c.env, tenantId, userId, 'kill_switch_deactivated',
+      `${scope}:${campaign_id ?? ''}:${contact_id ?? ''}`, { user_id: userId });
+
+    return c.json({ ok: true, kill_switch: false, scope });
+  });
+
   /**
    * PUT /v1/agent-controls/:scope
    */
@@ -234,6 +326,9 @@ export function createControlPanelRouter(): Hono<HonoCtx> {
     }
 
     const scope    = c.req.param('scope') as ControlScope;
+    if (!VALID_SCOPES.includes(scope)) {
+      return c.json({ error: `invalid_scope: must be one of ${VALID_SCOPES.join(', ')}` }, 400);
+    }
     const tenantId = c.get('tenant_id');
     const { campaign_id, contact_id } = c.req.query() as { campaign_id?: string; contact_id?: string };
 
@@ -427,93 +522,6 @@ export function createControlPanelRouter(): Hono<HonoCtx> {
       action_type: action.action_type,
     });
     return c.json({ ok: true, action_id: actionId, status: 'revoked' });
-  });
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // KILL SWITCH
-  // ──────────────────────────────────────────────────────────────────────────
-
-  app.post('/kill-switch', async (c) => {
-    const userRole = c.get('user_role');
-    if (!['admin', 'operator'].includes(userRole)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-
-    const body = await c.req.json<{
-      scope:        ControlScope;
-      campaign_id?: string;
-      contact_id?:  string;
-      reason?:      string;
-    }>();
-
-    if (!VALID_SCOPES.includes(body.scope)) {
-      return c.json({ error: 'invalid_scope' }, 400);
-    }
-
-    const tenantId  = c.get('tenant_id');
-    const userId    = c.get('user_id');
-    const now       = nowISO();
-    const controlId = uuidv4();
-
-    const killPayload = JSON.stringify({ kill_switch: true });
-
-    await c.env.DB.prepare(
-      `INSERT INTO agent_controls
-         (id, tenant_id, scope, campaign_id, contact_id, controls_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (tenant_id, scope, COALESCE(campaign_id,''), COALESCE(contact_id,''))
-       DO UPDATE SET controls_json=json_patch(controls_json, '{"kill_switch":true}'), updated_at=excluded.updated_at`,
-    ).bind(
-      controlId, tenantId, body.scope,
-      body.campaign_id ?? null, body.contact_id ?? null,
-      killPayload, now, now,
-    ).run();
-
-    await c.env.KV_CONFIG.put(
-      `kill_switch:${tenantId}:${body.scope}:${body.campaign_id ?? ''}:${body.contact_id ?? ''}`,
-      '1',
-      { expirationTtl: 7 * 86400 },
-    );
-
-    await writeAudit(c.env, tenantId, userId, 'kill_switch_activated',
-      `${body.scope}:${body.campaign_id ?? ''}:${body.contact_id ?? ''}`,
-      { reason: body.reason, user_id: userId });
-
-    return c.json({ ok: true, kill_switch: true, scope: body.scope });
-  });
-
-  app.delete('/kill-switch', async (c) => {
-    const userRole = c.get('user_role');
-    if (!['admin', 'operator'].includes(userRole)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-
-    const { scope, campaign_id, contact_id } = c.req.query() as {
-      scope: ControlScope; campaign_id?: string; contact_id?: string;
-    };
-
-    if (!VALID_SCOPES.includes(scope)) return c.json({ error: 'invalid_scope' }, 400);
-
-    const tenantId = c.get('tenant_id');
-    const userId   = c.get('user_id');
-    const now      = nowISO();
-
-    await c.env.DB.prepare(
-      `UPDATE agent_controls
-       SET controls_json=json_patch(controls_json, '{"kill_switch":false}'), updated_at=?
-       WHERE tenant_id=? AND scope=?
-         AND COALESCE(campaign_id,'')=?
-         AND COALESCE(contact_id,'')=?`,
-    ).bind(now, tenantId, scope, campaign_id ?? '', contact_id ?? '').run();
-
-    await c.env.KV_CONFIG.delete(
-      `kill_switch:${tenantId}:${scope}:${campaign_id ?? ''}:${contact_id ?? ''}`,
-    );
-
-    await writeAudit(c.env, tenantId, userId, 'kill_switch_deactivated',
-      `${scope}:${campaign_id ?? ''}:${contact_id ?? ''}`, { user_id: userId });
-
-    return c.json({ ok: true, kill_switch: false, scope });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
