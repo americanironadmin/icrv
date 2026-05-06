@@ -13,6 +13,7 @@ import { rateAllow, isDuplicate, scheduleRetry } from '@icrv/shared/queue-helper
 interface EmailEnv extends BaseEnv {
   GOOGLE_CLIENT_ID:     string;
   GOOGLE_CLIENT_SECRET: string;
+  EMAIL_TRACK_KEY?:     string;
 }
 
 // ─── HTTP — health + send-now (called by icrv-consumer service binding) ─────
@@ -104,11 +105,10 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
   const { access_token } = await tokRes.json() as { access_token: string };
 
   // Rewrite tracking links + add open pixel + List-Unsubscribe
-  const unsubToken = await ensureUnsubToken(env, p);
   const trackingHost = p.tracking_domain || 'icrv-api.americanironus.com';
-  const unsubUrl = `https://${trackingHost}/u/${unsubToken}`;
+  const unsubUrl = await buildUnsubUrl(env, p, trackingHost);
   const htmlBody = appendCanSpamFooter(
-    injectTracking(p.html_body, p.message_id, trackingHost),
+    await injectTracking(p.html_body, p, trackingHost, env, settings),
     settings, unsubUrl,
   );
   const headersExtra: string[] = [
@@ -152,30 +152,104 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-async function ensureUnsubToken(env: EmailEnv, p: EmailOutPayload): Promise<string> {
+async function buildUnsubUrl(env: EmailEnv, p: EmailOutPayload, host: string): Promise<string> {
+  if (env.EMAIL_TRACK_KEY) {
+    const token = await signHmacToken(env.EMAIL_TRACK_KEY, {
+      tenant_id:   p.tenant_id,
+      contact_id:  p.contact_id,
+      campaign_id: p.campaign_id ?? null,
+      message_id:  p.message_id,
+      iat:         Math.floor(Date.now() / 1000),
+    });
+    return `https://${host}/u/${token}`;
+  }
+  // Fallback: legacy UUID token, persisted in unsubscribes table.
   const existing = await env.DB.prepare(
     `SELECT token FROM unsubscribes WHERE tenant_id=? AND (contact_id=? OR email=?) AND channel='email' LIMIT 1`,
   ).bind(p.tenant_id, p.contact_id, p.to_email).first<{ token: string }>();
-  if (existing) return existing.token;
+  if (existing) return `https://${host}/u/${existing.token}`;
   const token = uuidv4();
   await env.DB.prepare(
     `INSERT INTO unsubscribes (id, tenant_id, contact_id, email, token, channel, created_at)
      VALUES (?, ?, ?, ?, ?, 'email', ?)`,
   ).bind(uuidv4(), p.tenant_id, p.contact_id, p.to_email, token, nowISO()).run();
-  return token;
+  return `https://${host}/u/${token}`;
 }
 
-function injectTracking(html: string, messageId: string, trackingDomain: string): string {
-  // Rewrite <a href="…"> to redirect via tracking endpoint
-  const rewritten = html.replace(/<a\s+([^>]*?)href="([^"]+)"([^>]*)>/gi, (_m, before, href, after) => {
-    if (/^(mailto:|tel:|#)/i.test(href)) return `<a ${before}href="${href}"${after}>`;
-    const target = `https://${trackingDomain}/t/c/${messageId}?u=${encodeURIComponent(href)}`;
-    return `<a ${before}href="${target}"${after}>`;
-  });
-  // Insert open pixel before </body> (or append if no </body>)
-  const pixel = `<img src="https://${trackingDomain}/t/o/${messageId}.gif" width="1" height="1" alt="" style="display:none" />`;
-  if (/<\/body>/i.test(rewritten)) return rewritten.replace(/<\/body>/i, `${pixel}</body>`);
-  return rewritten + pixel;
+interface TrackingSettings {
+  open_tracking?: boolean;
+  click_tracking?: boolean;
+  custom_domain?: string;
+  utm_prefix?: string;
+  utm_medium?: string;
+  utm_campaign_prefix?: string;
+}
+
+async function injectTracking(
+  html: string, p: EmailOutPayload, trackingDomain: string,
+  env: EmailEnv, settings: TenantSettingsView,
+): Promise<string> {
+  const tr = (settings as unknown as { tracking?: TrackingSettings }).tracking ?? {};
+  const openOn  = tr.open_tracking !== false;
+  const clickOn = tr.click_tracking !== false;
+  const utmSource   = tr.utm_prefix || 'icrv';
+  const utmMedium   = tr.utm_medium || 'email';
+  const utmCampaign = `${tr.utm_campaign_prefix || ''}${p.campaign_id ?? p.message_id}`;
+
+  const eid = env.EMAIL_TRACK_KEY ? await signHmacToken(env.EMAIL_TRACK_KEY, {
+    tenant_id:   p.tenant_id,
+    contact_id:  p.contact_id,
+    campaign_id: p.campaign_id ?? null,
+    message_id:  p.message_id,
+    iat:         Math.floor(Date.now() / 1000),
+  }) : '';
+
+  // Rewrite <a href="…"> to redirect via tracking endpoint with UTM params.
+  let rewritten = html;
+  if (clickOn) {
+    rewritten = html.replace(/<a\s+([^>]*?)href="([^"]+)"([^>]*)>/gi, (_m, before, href, after) => {
+      if (/^(mailto:|tel:|#)/i.test(href)) return `<a ${before}href="${href}"${after}>`;
+      const withUtm = appendUtm(href, utmSource, utmMedium, utmCampaign);
+      const b64 = b64urlEncode(new TextEncoder().encode(withUtm));
+      const target = `https://${trackingDomain}/r?u=${encodeURIComponent(b64)}${eid ? `&eid=${eid}` : ''}`;
+      return `<a ${before}href="${target}"${after}>`;
+    });
+  }
+  // Insert open pixel before </body> (or append if no </body>).
+  if (openOn && eid) {
+    const pixel = `<img src="https://${trackingDomain}/track/open?eid=${eid}" width="1" height="1" alt="" style="display:none" />`;
+    if (/<\/body>/i.test(rewritten)) return rewritten.replace(/<\/body>/i, `${pixel}</body>`);
+    return rewritten + pixel;
+  }
+  return rewritten;
+}
+
+function appendUtm(href: string, source: string, medium: string, campaign: string): string {
+  try {
+    const u = new URL(href);
+    if (!u.searchParams.has('utm_source'))   u.searchParams.set('utm_source', source);
+    if (!u.searchParams.has('utm_medium'))   u.searchParams.set('utm_medium', medium);
+    if (!u.searchParams.has('utm_campaign')) u.searchParams.set('utm_campaign', campaign);
+    return u.toString();
+  } catch {
+    return href;
+  }
+}
+
+function b64urlEncode(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function signHmacToken(secret: string, payload: Record<string, unknown>): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const body = b64urlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  return `${body}.${b64urlEncode(new Uint8Array(sig))}`;
 }
 
 function buildRfc2822(opts: {
@@ -241,13 +315,14 @@ interface TenantSettingsView {
     unsubscribe_text?: string;
   };
   sending:    Record<string, unknown> & { daily_limit?: number; throttle_per_sec?: number };
+  tracking:   Record<string, unknown> & { open_tracking?: boolean; click_tracking?: boolean; custom_domain?: string; utm_prefix?: string; utm_medium?: string; utm_campaign_prefix?: string };
 }
 
 async function loadTenantSettings(env: EmailEnv, tenantId: string): Promise<TenantSettingsView> {
   const row = await env.DB.prepare(
-    `SELECT workspace_json, compliance_json, sending_json
+    `SELECT workspace_json, compliance_json, sending_json, tracking_json
        FROM tenant_settings WHERE tenant_id = ?`,
-  ).bind(tenantId).first<{ workspace_json: string; compliance_json: string; sending_json: string }>();
+  ).bind(tenantId).first<{ workspace_json: string; compliance_json: string; sending_json: string; tracking_json: string }>();
   const safe = (s?: string): Record<string, unknown> => {
     if (!s) return {};
     try { return JSON.parse(s); } catch { return {}; }
@@ -256,6 +331,7 @@ async function loadTenantSettings(env: EmailEnv, tenantId: string): Promise<Tena
     workspace:  safe(row?.workspace_json),
     compliance: safe(row?.compliance_json),
     sending:    safe(row?.sending_json),
+    tracking:   safe(row?.tracking_json),
   };
 }
 

@@ -24,6 +24,7 @@ import { createCampaignsRouter, createTemplatesRouter } from './routes/campaigns
 import { createCallsRouter }     from './routes/calls';
 import { createDashboardRouter, createLogsRouter, createAuthRouter, createAdminRouter } from './routes/misc';
 import { createSettingsRouter } from './routes/settings';
+import { createEmailAuthRouter } from './routes/email-auth';
 import { handleUnsubscribe, handleTrackOpen, handleTrackClick } from './routes/public';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
@@ -231,6 +232,7 @@ v1.route('/calls',     createCallsRouter());
 v1.route('/dashboard', createDashboardRouter());
 v1.route('/logs',      createLogsRouter());
 v1.route('/settings',  createSettingsRouter());
+v1.route('/auth',      createEmailAuthRouter());  // /v1/auth/check-{dkim,spf,dmarc} — same prefix as createAuthRouter, second mount adds these endpoints
 
 // /v1/agent-controls/* — defense-in-depth: viewers blocked at the gateway in
 // addition to whatever icrv-agent enforces internally. Closes the M6 risk where

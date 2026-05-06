@@ -18,6 +18,11 @@ export interface ApiEnv extends BaseEnv {
   // Internal JWT signing
   JWT_SIGNING_KEY:       string;   // 32-byte hex secret (HS256)
 
+  // Email tracking + unsubscribe HMAC seed (Phase 3). Shared with icrv-email
+  // so the worker can mint open/click/unsubscribe tokens that this gateway
+  // verifies on inbound /track/* and /u/* hits.
+  EMAIL_TRACK_KEY:       string;
+
   // For OAuth proxy support
   GOOGLE_CLIENT_ID:      string;
   GOOGLE_CLIENT_SECRET:  string;

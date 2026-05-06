@@ -79,7 +79,7 @@ export async function handleUnsubscribe(c: Context<{ Bindings: ApiEnv }>): Promi
   let contact_id: string | undefined;
   let campaign_id: string | undefined;
 
-  const secret = c.env.JWT_SIGNING_KEY;
+  const secret = c.env.EMAIL_TRACK_KEY || c.env.JWT_SIGNING_KEY;
   if (secret) {
     const claims = await verifyToken(secret, token);
     if (claims && typeof claims === 'object') {
@@ -157,7 +157,7 @@ export async function handleTrackOpen(c: Context<{ Bindings: ApiEnv }>): Promise
   const ua  = c.req.header('User-Agent') ?? '';
   const ip  = c.req.header('CF-Connecting-IP') ?? '';
   if (eid) {
-    const claims = await verifyToken(c.env.JWT_SIGNING_KEY, eid);
+    const claims = await verifyToken(c.env.EMAIL_TRACK_KEY || c.env.JWT_SIGNING_KEY, eid);
     if (claims) {
       const tenant_id   = claims.tenant_id   as string | undefined;
       const contact_id  = claims.contact_id  as string | undefined;
@@ -203,7 +203,7 @@ export async function handleTrackClick(c: Context<{ Bindings: ApiEnv }>): Promis
     return new Response('bad_url', { status: 400 });
   }
   if (eid) {
-    const claims = await verifyToken(c.env.JWT_SIGNING_KEY, eid);
+    const claims = await verifyToken(c.env.EMAIL_TRACK_KEY || c.env.JWT_SIGNING_KEY, eid);
     if (claims) {
       const tenant_id   = claims.tenant_id   as string | undefined;
       const contact_id  = claims.contact_id  as string | undefined;
