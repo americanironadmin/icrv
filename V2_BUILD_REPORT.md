@@ -94,10 +94,12 @@ shipped without rollback.
 
 1. **Cloudflare Access bypass list** — add the following paths to the Access
    app for `icrv-api.americanironus.com` so unauthenticated callers can hit
-   them. Without this, unsubscribe links and tracking pixels return 401.
+   them. Without this, unsubscribe links / tracking pixels / consent buttons
+   in delivered emails return 401.
    - `/u/*`           (CAN-SPAM unsubscribe)
    - `/track/*`       (open pixel)
    - `/r`             (click redirect)
+   - `/consent/*`     (v2.6 consent capture)
    - already bypassed: `/health`, `/csp-report`, `/oauth/google/callback`
 
 2. **CAN-SPAM physical address** — `/settings/compliance` will show a red
