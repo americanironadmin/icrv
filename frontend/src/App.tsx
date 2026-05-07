@@ -27,6 +27,8 @@ import AIControlPanel from './pages/AIControlPanel'
 import ActivityLogs   from './pages/ActivityLogs'
 import CallMonitoring from './pages/CallMonitoring'
 import Settings       from './pages/Settings'
+import LeadIntelligence from './pages/LeadIntelligence'
+import Analytics      from './pages/Analytics'
 import NotFound       from './pages/NotFound'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
@@ -179,6 +181,8 @@ export default function App() {
             <Route path="/ai"          element={<RouteErrorBoundary routeLabel="AI CONTROL"><AIControlPanel /></RouteErrorBoundary>} />
             <Route path="/logs"        element={<RouteErrorBoundary routeLabel="ACTIVITY LOGS"><ActivityLogs /></RouteErrorBoundary>} />
             <Route path="/calls"       element={<RouteErrorBoundary routeLabel="CALL MONITORING"><CallMonitoring /></RouteErrorBoundary>} />
+            <Route path="/leads/*"     element={<RouteErrorBoundary routeLabel="LEAD INTELLIGENCE"><LeadIntelligence /></RouteErrorBoundary>} />
+            <Route path="/analytics"   element={<RouteErrorBoundary routeLabel="ANALYTICS"><Analytics /></RouteErrorBoundary>} />
             <Route path="/settings/*"  element={<RouteErrorBoundary routeLabel="SETTINGS"><Settings /></RouteErrorBoundary>} />
             <Route path="*"            element={<NotFound />} />
           </Routes>

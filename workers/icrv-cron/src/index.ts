@@ -3,6 +3,7 @@
 import type { BaseEnv } from '@icrv/shared/types';
 import { uuidv4, nowISO } from '@icrv/shared/crypto';
 import { RingCentralClient } from '@icrv/shared/ring-central-client';
+import { calculateLeadScore } from '@icrv/shared/scoring';
 
 export interface CronEnv extends BaseEnv {
   HOOKS_BASE_URL: string;   // e.g. https://hooks.icrv.app
@@ -260,6 +261,9 @@ async function runRateWindowRoll(env: CronEnv): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runNightlyMaintenance(env: CronEnv): Promise<void> {
+  // Phase 4 — full lead-score recalculation for every active tenant.
+  await runLeadScoringSweep(env);
+
   // Purge audit_logs > 90 days
   await env.DB.prepare(
     `DELETE FROM audit_logs WHERE created_at < datetime('now', '-90 days')`,
@@ -460,3 +464,73 @@ export default {
     );
   },
 } satisfies ExportedHandler<CronEnv>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4: nightly lead-score sweep
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function runLeadScoringSweep(env: CronEnv): Promise<void> {
+  const tenants = await env.DB.prepare(
+    `SELECT id FROM tenants`,
+  ).all<{ id: string }>();
+  for (const t of tenants.results ?? []) {
+    const contacts = await env.DB.prepare(
+      `SELECT id, country_code, industry, tags_json FROM contacts WHERE tenant_id = ? LIMIT 5000`,
+    ).bind(t.id).all<{ id: string; country_code: string | null; industry: string | null; tags_json: string | null }>();
+    for (const c of contacts.results ?? []) {
+      const trackRows = await env.DB.prepare(
+        `SELECT type, COUNT(*) AS n FROM tracking_events
+           WHERE tenant_id = ? AND contact_id = ?
+           GROUP BY type`,
+      ).bind(t.id, c.id).all<{ type: string; n: number }>();
+      const trackMap: Record<string, number> = {};
+      for (const r of trackRows.results ?? []) trackMap[r.type] = r.n;
+      const repliesRow = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM message_events e
+           JOIN messages m ON m.id = e.message_id
+          WHERE m.tenant_id = ? AND m.contact_id = ? AND e.event_type = 'replied'`,
+      ).bind(t.id, c.id).first<{ n: number }>();
+      const recentRow = await env.DB.prepare(
+        `SELECT MAX(occurred_at) AS last FROM tracking_events
+           WHERE tenant_id = ? AND contact_id = ?`,
+      ).bind(t.id, c.id).first<{ last: string | null }>();
+      const lastTs = recentRow?.last ? new Date(recentRow.last).getTime() : 0;
+      const recent = lastTs > 0 && Date.now() - lastTs < 7 * 24 * 60 * 60 * 1000;
+      const tags: string[] = c.tags_json ? safeArr(c.tags_json) : [];
+
+      const score = calculateLeadScore(
+        {
+          opens:  trackMap.open  ?? 0,
+          clicks: trackMap.click ?? 0,
+          replies: repliesRow?.n ?? 0,
+          website_visits: 0, form_submissions: 0,
+          last_activity_within_7d: recent,
+        },
+        { country: c.country_code ?? undefined, industry: c.industry ?? undefined },
+        tags,
+      );
+
+      await env.DB.prepare(
+        `INSERT INTO lead_scores
+           (contact_id, tenant_id, score, category, engagement_score, demographic_score, behavioral_score, tag_score, last_calculated)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(contact_id) DO UPDATE SET
+           score=excluded.score, category=excluded.category,
+           engagement_score=excluded.engagement_score,
+           demographic_score=excluded.demographic_score,
+           behavioral_score=excluded.behavioral_score,
+           tag_score=excluded.tag_score,
+           last_calculated=excluded.last_calculated`,
+      ).bind(
+        c.id, t.id, score.score, score.category,
+        score.engagement, score.demographic, score.behavioral, score.tag,
+        nowISO(),
+      ).run();
+    }
+  }
+}
+
+function safeArr(s: string): string[] {
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v.map(String) : []; }
+  catch { return []; }
+}
