@@ -11,7 +11,8 @@
     "./credentials": "./src/credentials.ts",
     "./ring-central-client": "./src/ring-central-client.ts",
     "./rate-limit": "./src/rate-limit.ts",
-    "./sentry-scrub": "./src/sentry-scrub.ts"
+    "./sentry-scrub": "./src/sentry-scrub.ts",
+    "./scoring": "./src/scoring.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240924.0",

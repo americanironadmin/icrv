@@ -425,6 +425,7 @@ input[type='range']::-webkit-slider-thumb {
 .badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(139,92,246,0.3); }
 .badge-gray   { background: var(--bg-hover); color: var(--text-muted); border: 1px solid var(--border-default); }
 .badge-accent { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(245,158,11,0.3); }
+.badge-ghost  { background: var(--bg-hover); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
 
 /* ── Table ── */
 .table-wrap { overflow-x: auto; }
@@ -686,6 +687,10 @@ tbody tr:last-child td { border-bottom: none; }
   text-transform: uppercase;
   color: var(--text-secondary);
   margin-bottom: 0.35rem;
+}
+.empty-state-body {
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 
 /* ── Pagination ── */

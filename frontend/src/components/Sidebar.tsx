@@ -18,7 +18,9 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/ai',      icon: '◉', label: 'AI Control',  sublabel: 'Agent' },
   { path: '/logs',    icon: '≡', label: 'Activity',    sublabel: 'Logs' },
   { path: '/calls',   icon: '◎', label: 'Call Monitor',sublabel: 'Voice' },
-  { path: '/settings',icon: '⚙', label: 'Settings',    sublabel: 'Integrations' },
+  { path: '/leads',   icon: '◆', label: 'Leads',       sublabel: 'Intelligence' },
+  { path: '/analytics',icon:'∞', label: 'Analytics',   sublabel: 'Insights' },
+  { path: '/settings',icon: '⚙', label: 'Settings',    sublabel: 'Workspace' },
 ]
 
 export default function Sidebar() {
