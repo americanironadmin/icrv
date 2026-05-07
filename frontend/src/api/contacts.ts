@@ -66,8 +66,9 @@ export const contactsApi = {
     page?: number
     per_page?: number
     search?: string
-    consent_filter?: string
     tag?: string
+    consent_state?: 'granted' | 'revoked' | 'pending' | 'none' | 'never_requested'
+    consent_channel?: 'email' | 'whatsapp' | 'voice'
   }): Promise<ContactsListResponse> =>
     get<ContactsListResponse>('/v1/contacts', params as Record<string, unknown>),
 
@@ -97,7 +98,7 @@ export const contactsApi = {
     post<{ affected: number }>('/v1/contacts/bulk', body as unknown as Record<string, unknown>),
 
   consentRequest: (body: { filter: BulkFilter; only_pending?: boolean }):
-    Promise<{ requested: number; skipped_no_email: number; total_matched: number }> =>
+    Promise<{ requested: number; total_matched: number; skipped_no_email?: number }> =>
     post('/v1/contacts/consent-request', body as unknown as Record<string, unknown>),
 
   consentSummary: (channel: 'email' | 'whatsapp' | 'voice' = 'email'):

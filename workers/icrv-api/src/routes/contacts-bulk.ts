@@ -76,15 +76,19 @@ export function createContactsBulkRouter(): Hono<HonoCtx> {
     const revoked = states?.revoked ?? 0;
     const pending = states?.pending ?? 0;
     const noneRow = states?.none ?? 0;
-    const never_requested = total - granted - revoked - pending - noneRow + noneRow; // contacts with NO consents row at all
-    const tracked = granted + revoked + pending + noneRow;
+    // "never_requested" surfaces both
+    //   (a) contacts with no consents row at all, and
+    //   (b) contacts with a consents row in state='none' AND requested_at IS NULL
+    //       (these would otherwise be invisible in the UI).
+    const tracked = granted + revoked + pending; // exclude noneRow so (b) folds into never_requested
+    const never_requested = Math.max(0, total - tracked);
     return c.json({
       channel,
       total,
       granted,
       revoked,
       pending,
-      never_requested: Math.max(0, total - tracked),
+      never_requested,
     });
   });
 
@@ -118,11 +122,14 @@ export function createContactsBulkRouter(): Hono<HonoCtx> {
     if (body.only_pending) {
       filter = { ...filter, consent_state: 'pending', consent_channel: 'email' };
     }
-    // Always require an email address — we can't send to NULL.
-    filter = { ...filter, has_email: true };
 
-    const queued = await sendConsentRequests(c.env, tenantId, filter, sender);
-    return c.json(queued);
+    // Count selection BEFORE the email-required filter so the response tells
+    // the truth about how many of the user's selection lacked an email.
+    const totalMatched = await countMatching(c.env.DB, tenantId, filter);
+    const emailFilter: BulkFilter = { ...filter, has_email: true };
+
+    const queued = await sendConsentRequests(c.env, tenantId, emailFilter, sender);
+    return c.json({ ...queued, skipped_no_email: totalMatched - queued.requested, total_matched: totalMatched });
   });
 
   return app;
@@ -358,9 +365,29 @@ async function pickActiveGmailSender(db: D1Database, tenantId: string): Promise<
   };
 }
 
+async function countMatching(db: D1Database, tenantId: string, filter: BulkFilter): Promise<number> {
+  if (filter.ids && filter.ids.length > 0) {
+    let total = 0;
+    for (let i = 0; i < filter.ids.length; i += ID_BATCH) {
+      const chunk = filter.ids.slice(i, i + ID_BATCH);
+      const ph = chunk.map(() => '?').join(',');
+      const r = await db.prepare(
+        `SELECT COUNT(*) AS n FROM contacts WHERE tenant_id = ? AND id IN (${ph})`,
+      ).bind(tenantId, ...chunk).first<{ n: number }>();
+      total += r?.n ?? 0;
+    }
+    return total;
+  }
+  const f = resolveFilter(tenantId, filter);
+  const r = await db.prepare(
+    `SELECT COUNT(*) AS n FROM contacts c WHERE ${f.whereSql}`,
+  ).bind(...f.binds).first<{ n: number }>();
+  return r?.n ?? 0;
+}
+
 async function sendConsentRequests(
   env: import('../env').ApiEnv, tenantId: string, filter: BulkFilter, sender: SenderContext,
-): Promise<{ requested: number; skipped_no_email: number; total_matched: number }> {
+): Promise<{ requested: number; total_matched: number }> {
   const f = resolveFilter(tenantId, filter);
   const rows = await env.DB.prepare(
     `SELECT c.id, c.name, c.email FROM contacts c WHERE ${f.whereSql}`,
@@ -368,12 +395,13 @@ async function sendConsentRequests(
   const matched = rows.results ?? [];
 
   let requested = 0;
-  let skipped = 0;
   const now = nowISO();
   const apiBase = sender.tracking_domain;
 
   for (const r of matched) {
-    if (!r.email) { skipped++; continue; }
+    // Caller has already filtered to has_email=true rows; this guard remains
+    // as defence in depth in case the filter is bypassed.
+    if (!r.email) continue;
 
     const requestId = uuidv4();
     const token = await signConsentToken(env, {
@@ -440,7 +468,7 @@ async function sendConsentRequests(
     requested++;
   }
 
-  return { requested, skipped_no_email: skipped, total_matched: matched.length };
+  return { requested, total_matched: matched.length };
 }
 
 async function signConsentToken(env: import('../env').ApiEnv, claims: Record<string, unknown>): Promise<string> {

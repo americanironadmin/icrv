@@ -26,6 +26,27 @@ Existing infra was reused (NOT recreated): KV namespaces, R2 buckets, D1 db, sec
 New resource added: Cloudflare Queue `icrv-imports` (Phase 1A).
 New secrets added: `EMAIL_TRACK_KEY` on icrv-api + icrv-email (Phase 3).
 
+## Honest correction (post v2.6 self-audit)
+
+The earlier "no row-count limit" claim was **overstated** in places. Actual scaling:
+
+| Bulk operation | Scaling profile |
+|---|---|
+| `set_field` filter-based            | Single SQL `UPDATE … WHERE id IN (subquery)` — truly unbounded. |
+| `set_field` ID-list                 | Chunked 250 IDs / SQL — works for any client-supplied list. |
+| `delete` filter-based               | Materialises matching IDs into Worker memory, then chunks. Practical ceiling ~3–4M contacts on a 128 MB Worker. |
+| `delete` ID-list                    | Chunked 250 / SQL — unbounded. |
+| `add_tag` / `remove_tag` / `set_tags` | Pages 1000 rows; read-merge-write per row. Slow at scale but does not fail. |
+| `set_consent`                       | One INSERT-on-conflict per contact. Slow at >100k, never fails. |
+
+For the current 1,777 contacts and the realistic next 100k–1M range these run comfortably in a single request. Beyond a few million contacts, the per-row paths would need to move to an async queue (same shape as the Phase 1A import-jobs flow).
+
+Bug fixes applied in this self-audit pass:
+
+- `GET /v1/contacts` now accepts `consent_state` and `consent_channel` query params and applies them server-side. The dashboard's consent-state dropdown now filters the visible table (was: only the bulk-action target). Verified: the four states `granted | pending | revoked | never_requested` produce the same row counts the in-route SQL produces (1777 / 0 / 0 / 0 / 1777 against current data — correct).
+- `POST /v1/contacts/consent-request` now reports `skipped_no_email` from a pre-filter count (was: always 0 because the row iteration was already constrained to has-email rows).
+- Consent-summary `never_requested` now folds in the previously hidden bucket "consents row exists with state='none' AND requested_at IS NULL", so granted+pending+revoked+never_requested == total exactly.
+
 ## Status matrix
 
 | Phase | Feature | Status | Branch / Commit |

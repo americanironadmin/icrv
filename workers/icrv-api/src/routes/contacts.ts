@@ -63,6 +63,10 @@ export function createContactsRouter(): Hono<HonoCtx> {
   const app = new Hono<HonoCtx>();
 
   // GET /v1/contacts
+  // Query params:
+  //   page, per_page, search, tag           (existing)
+  //   consent_state=granted|revoked|pending|none|never_requested
+  //   consent_channel=email|whatsapp|voice  (default: email)
   app.get('/', async (c) => {
     const tenantId = c.get('tenant_id');
     const q = c.req.query();
@@ -71,6 +75,8 @@ export function createContactsRouter(): Hono<HonoCtx> {
     const offset  = (page - 1) * perPage;
     const search  = q.search?.trim();
     const tag     = q.tag?.trim();
+    const consentState   = q.consent_state?.trim().toLowerCase();
+    const consentChannel = (q.consent_channel?.trim().toLowerCase() || 'email');
 
     const where: string[] = ['tenant_id = ?'];
     const binds: unknown[] = [tenantId];
@@ -81,6 +87,27 @@ export function createContactsRouter(): Hono<HonoCtx> {
     if (tag) {
       where.push(`id IN (SELECT contact_id FROM contact_tags WHERE tenant_id = ? AND tag = ?)`);
       binds.push(tenantId, tag);
+    }
+    if (consentState) {
+      switch (consentState) {
+        case 'granted':
+        case 'revoked':
+        case 'none':
+          where.push(`id IN (SELECT contact_id FROM consents WHERE tenant_id = ? AND channel = ? AND consent_state = ?)`);
+          binds.push(tenantId, consentChannel, consentState);
+          break;
+        case 'pending':
+          where.push(`id IN (SELECT contact_id FROM consents WHERE tenant_id = ? AND channel = ? AND consent_state = 'none' AND requested_at IS NOT NULL)`);
+          binds.push(tenantId, consentChannel);
+          break;
+        case 'never_requested':
+          where.push(`id NOT IN (SELECT contact_id FROM consents WHERE tenant_id = ? AND channel = ?)`);
+          binds.push(tenantId, consentChannel);
+          break;
+        default:
+          // ignore unknown values rather than 500
+          break;
+      }
     }
     const whereClause = where.join(' AND ');
 

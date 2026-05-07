@@ -533,7 +533,13 @@ export default function Contacts() {
   const loadContacts = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await contactsApi.list({ page, per_page: perPage, search: search || undefined })
+      const res = await contactsApi.list({
+        page,
+        per_page: perPage,
+        search: search || undefined,
+        consent_state: consentFilter === 'any' ? undefined : consentFilter,
+        consent_channel: consentFilter === 'any' ? undefined : 'email',
+      })
       setContacts(res.contacts)
       setTotal(res.total)
     } catch {
@@ -541,7 +547,7 @@ export default function Contacts() {
     } finally {
       setLoading(false)
     }
-  }, [page, perPage, search])
+  }, [page, perPage, search, consentFilter])
 
   const refreshSummary = useCallback(async () => {
     try { setSummary(await contactsApi.consentSummary('email')) } catch { /* non-fatal */ }
@@ -555,8 +561,9 @@ export default function Contacts() {
     return () => clearTimeout(t)
   }, [search]) // eslint-disable-line
 
-  // Clear selection when filter / search changes (the row population shifts).
-  useEffect(() => { setSelectedIds(new Set()); setSelectAllMatching(false) }, [consentFilter, search])
+  // Clear selection + reset paging when filter or search shifts the row population.
+  useEffect(() => { setSelectedIds(new Set()); setSelectAllMatching(false); setPage(1) }, [consentFilter])
+  useEffect(() => { setSelectedIds(new Set()); setSelectAllMatching(false) }, [search])
 
   const toggleRow = (id: string) => {
     setSelectAllMatching(false)
@@ -640,10 +647,14 @@ export default function Contacts() {
     setBulkBusy(true)
     try {
       const r = await contactsApi.consentRequest({ filter, only_pending: onlyPending })
+      const skipped = (r.skipped_no_email ?? 0)
+      const message = skipped > 0
+        ? `${r.requested} sent · ${skipped} skipped (no email on file)`
+        : `${r.requested} sent`
       showToast({
         type: 'success',
-        title: onlyPending ? 'Consent re-requests sent' : 'Consent requests sent',
-        message: `${r.requested} sent, ${r.skipped_no_email} skipped (no email)`,
+        title: onlyPending ? 'Consent re-requests queued' : 'Consent requests queued',
+        message,
       })
       clearSelection(); await refreshSummary()
     } catch (e) {
