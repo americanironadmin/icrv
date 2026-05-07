@@ -1,130 +1,195 @@
 # ICRV v2 mega-build — final report
 
 ## Session
-- Started: 2026-05-06 23:00 UTC
-- Mode: Fully autonomous (Operating rules per CC-PROMPT-icrv-v2-mega.md)
+- Started:  2026-05-06 23:00 UTC
+- Ended:    2026-05-06 23:55 UTC (compressed; one autonomous run)
+- Mode:     Fully autonomous (Operating rules per CC-PROMPT-icrv-v2-mega.md)
 - Operator: adam@americaniron1.com / admin / tenant_americaniron_001
+- Final main HEAD: see `git log -1`
 
-## Phase 0 inputs
-User invoked autonomous run with no per-input answers — all defaults applied.
+## Phase 0 inputs (defaults applied — user said "build")
 
 | Input | Default Applied |
 |---|---|
-| Bulk-upload error symptom | unknown — diagnose from code only |
-| Sample failing CSV size | unknown |
+| Bulk-upload error symptom | unknown — diagnosed from code |
 | Workspace | American Iron LLC / https://americaniron1.com / America/New_York |
 | CAN-SPAM physical address | `__PLACEHOLDER__` (UI warns, sends 422 until set) |
 | Daily sending limit / throttle | 500/day / 5/sec |
-| Custom tracking domain | not set — use `icrv-api.americanironus.com` |
+| Custom tracking domain | not set — uses `icrv-api.americanironus.com` |
 | Regional Outreach focus | Middle East (SA, AE, KW, EG, BH, OM, QA) |
 | Lead Intelligence weights | Engagement 35% / Demographics 25% / Behavioral 20% / Tags 20% |
 | Light mode | auto (prefers-color-scheme), persisted to localStorage |
 
-## Pre-existing state (Phase -1 discovery)
+## Pre-existing state (Phase -1 discovery — see git log of this file for original)
 
-### KV namespaces (DO NOT recreate)
-
-| Binding | Title | ID |
-|---|---|---|
-| KV_CONFIG | ICRV_KV_CONFIG | ab921928cea14fbe9756f9a67ae3c1d3 |
-| KV_OAUTH | ICRV_KV_OAUTH | 5e605b3a83994ee5b78b084d6b561d0b |
-| KV_RATE | ICRV_KV_RATE | daf3f5efc06346a1a383150ab1de37da |
-| KV_IDEMP | ICRV_KV_IDEMP | 878fe6fdfa844b9d96df8017ac39ee63 |
-| KV_TRACK | ICRV_KV_TRACK | 7926181a73194dd2a2e14307cb7d4a27 |
-| KV_REVOKED | KV_REVOKED | 09db5d58b02948a4ad5d60536dfbab01 |
-| KV_JWKS | KV_JWKS | 42576af6e50642f492fc1cc03c5f1e7b |
-
-### R2 buckets (DO NOT recreate)
-- `icrv-uploads` (R2_UPLOADS) — bulk-upload staging
-- `icrv-media` (R2_MEDIA)
-- `icrv-exports` (R2_EXPORTS) — D1 backups land here
-- `icrv-transcripts` (R2_TRANSCRIPTS)
-- `icrv-evidence` (R2_EVIDENCE)
-
-### D1 (`icrv-db`, fdf24661-6675-4570-b1b7-f2b672cad4bf) — existing tables
-agent_actions, agent_controls, agent_runs, api_credentials, audit_logs, call_logs,
-call_transcripts, campaign_enrollments, campaign_steps, campaigns, consents,
-contact_tags, contacts, message_events, messages, oauth_tokens, suppressions,
-templates, tenants, unsubscribes, **upload_jobs**, users, voicemails, webhooks_received
-
-### Secrets already set per worker (per `wrangler secret list`)
-- icrv-api: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SIGNING_KEY, MASTER_KEK
-- icrv-agent: ANTHROPIC_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MASTER_KEK
-- icrv-email: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MASTER_KEK
-- icrv-whatsapp: MASTER_KEK, WA_APP_SECRET, WA_PHONE_NUMBER_ID, WA_VERIFY_TOKEN, WA_WABA_ID
-- icrv-voice: ANTHROPIC_API_KEY, EL_API_KEY, EL_LLM_SHARED_SECRET, MASTER_KEK, RC_JWT
-- icrv-hooks: EL_WEBHOOK_SECRET, MASTER_KEK, RC_WEBHOOK_TOKEN, WA_ACCESS_TOKEN, WA_APP_SECRET, WA_PHONE_NUMBER_ID
-- icrv-consumer: ANTHROPIC_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MASTER_KEK, WA_ACCESS_TOKEN, WA_PHONE_NUMBER_ID, WA_WABA_ID
-- icrv-cron: CF_API_TOKEN
-
-### Custom domains live (DO NOT reconfigure)
-- `https://icrv.americanironus.com` — Pages dashboard (Access protected)
-- `https://icrv-api.americanironus.com` — icrv-api worker (Access protected)
-- Cloudflare Access in OAuth 2.0 Protected Resource mode (per memory) — service-token headers no longer work; smoke tests must hit unique-hash Pages URLs or be tolerant of 401 on bare-host probes.
-
-### Cron schedule (icrv-cron)
-crons = `* * * * *`, `*/5 * * * *`, `0 * * * *`, `0 3 * * *` (D1 backup at 03:00 UTC)
-
-### HARDENING_REPORT closure status
-All C, H, M items closed (table verified). L1 deferred. CSP enforcing flipped 2026-05-04.
-Make-it-real verification 2026-05-06: Email PASS; Voice/WhatsApp deferred (RC trial / Meta template approval).
-
-### Phase 1A important discovery
-- `upload_jobs` table EXISTS with columns: id, tenant_id, user_id, source_uri, status, total_rows, processed, accepted, rejected, errors_json, created_at, updated_at, completed_at
-- Existing `POST /v1/contacts/bulk-upload` parses INLINE (workers/icrv-api/src/routes/contacts.ts:249) — this is the bug source. Stages to R2, parses inline up to 50k rows, runs synchronous D1 inserts.
-- Will migrate to chunked-queue: keep `upload_jobs` table (extend with R2 key), introduce queue producer in api → consumer processes batches.
-- icrv-consumer ALREADY consumes `icrv-email-in`, `icrv-retry`, `icrv-dlq` (workers/icrv-consumer/src/index.ts) — extend to handle new `import_job` type messages on a new `Q_IMPORT` queue OR reuse `Q_AGENT`.
-
-### Frontend state
-- React 18 + Vite + react-router 6
-- Pages: Dashboard, Contacts, Campaigns, ActivityLogs, AIControlPanel, CallMonitoring, Settings, NotFound
-- papaparse already installed (CSV parser); xlsx and recharts NOT installed yet
-- index.css drives dark theme via CSS vars on `:root`
-
-### Dependencies decided
-- xlsx@0.18 (Phase 1B) — frontend-only Excel→CSV
-- recharts (Phase 4B) — analytics charts
+Existing infra was reused (NOT recreated): KV namespaces, R2 buckets, D1 db, secrets per worker.
+New resource added: Cloudflare Queue `icrv-imports` (Phase 1A).
+New secrets added: `EMAIL_TRACK_KEY` on icrv-api + icrv-email (Phase 3).
 
 ## Status matrix
 
-| Phase | Feature | Status | Commit |
+| Phase | Feature | Status | Branch / Commit |
 |---|---|---|---|
-| 1 | Bulk upload chunked queue | PENDING | — |
-| 1 | Excel import | PENDING | — |
-| 1 | Light mode | PENDING | — |
-| 1 | Visual polish | PENDING | — |
-| 2 | General settings | PENDING | — |
-| 2 | Compliance settings | PENDING | — |
-| 2 | Sending limits | PENDING | — |
-| 2 | Unsubscribe endpoint | PENDING | — |
-| 3 | DKIM/SPF/DMARC verifier | PENDING | — |
-| 3 | Open tracking | PENDING | — |
-| 3 | Click tracking | PENDING | — |
-| 3 | UTM auto-append | PENDING | — |
-| 4 | Lead scoring engine | PENDING | — |
-| 4 | Lead intelligence UI | PENDING | — |
-| 4 | All leads ranked | PENDING | — |
-| 4 | Analytics dashboard | PENDING | — |
-| 5 | Templates library UI | PENDING | — |
-| 5 | Personalization engine | PENDING | — |
-| 5 | Bounce handling | PENDING | — |
-| 5 | API & Webhooks | PENDING | — |
-| 5 | Regional Outreach (EN+AR) | PENDING | — |
-| 5 | WhatsApp Quotes stub | PENDING | — |
+| 1 | Bulk upload chunked queue           | SHIPPED | feat/v2.1-urgent / e888a3a |
+| 1 | Excel (.xlsx) import                | SHIPPED | feat/v2.1-urgent |
+| 1 | Light mode (auto + toggle)          | SHIPPED | feat/v2.1-urgent |
+| 1 | Visual polish pass                  | SHIPPED | feat/v2.1-urgent |
+| 2 | Workspace settings (`/general`)     | SHIPPED | feat/v2.2-settings / d622c79 |
+| 2 | Compliance settings (`/compliance`) | SHIPPED | feat/v2.2-settings |
+| 2 | Sending limits (`/sending`)         | SHIPPED | feat/v2.2-settings |
+| 2 | CAN-SPAM footer + 422 gate          | SHIPPED | feat/v2.2-settings |
+| 2 | Public `/u/:token` unsubscribe      | SHIPPED | feat/v2.2-settings (NEEDS Access bypass) |
+| 3 | DKIM verifier (DoH)                 | SHIPPED | feat/v2.3-auth-tracking / e279ff4 |
+| 3 | SPF verifier                        | SHIPPED | feat/v2.3-auth-tracking |
+| 3 | DMARC verifier                      | SHIPPED | feat/v2.3-auth-tracking |
+| 3 | Open tracking (HMAC-signed eid)     | SHIPPED | feat/v2.3-auth-tracking (NEEDS Access bypass) |
+| 3 | Click tracking + redirect           | SHIPPED | feat/v2.3-auth-tracking (NEEDS Access bypass) |
+| 3 | UTM auto-append                     | SHIPPED | feat/v2.3-auth-tracking |
+| 4 | Lead scoring engine (rule-based)    | SHIPPED | feat/v2.4-intelligence / 8aa8456 |
+| 4 | Lead intelligence dashboard         | SHIPPED | feat/v2.4-intelligence |
+| 4 | All-leads ranked table              | SHIPPED | feat/v2.4-intelligence |
+| 4 | Analytics dashboard (recharts)      | SHIPPED | feat/v2.4-intelligence |
+| 4 | Cron nightly recalc sweep           | SHIPPED | feat/v2.4-intelligence |
+| 5 | Templates library + editor + tags   | SHIPPED | feat/v2.5-content / 59fe9f0 |
+| 5 | Personalization engine (subst.)     | SHIPPED | feat/v2.5-content |
+| 5 | Bounce handling (clean endpoint)    | PARTIAL | feat/v2.5-content (operator-driven; auto-bump from Gmail DSN deferred) |
+| 5 | API key generation                  | SHIPPED | feat/v2.5-content |
+| 5 | Webhook subscriptions UI            | SHIPPED | feat/v2.5-content (delivery worker deferred — see below) |
+| 5 | Regional Outreach (EN+AR + RTL)     | SHIPPED | feat/v2.5-content |
+| 5 | WhatsApp Quotes stub                | SHIPPED | feat/v2.5-content |
 
-(updated as phases land)
+## What was stubbed and why
+
+### Webhook delivery worker (Phase 5 partial)
+**Stubbed:** `webhook_subscriptions` and `webhook_deliveries` tables exist;
+admin UI at `/settings/api-webhooks` lists/adds/removes subscriptions. The
+fan-out worker that signs HMAC payloads, retries with exponential backoff,
+and DLQs after 3 attempts is NOT implemented.
+**Unblock:** add a producer in icrv-consumer that, on every successful
+agent_action, enqueues a `webhook_delivery` job into a new `icrv-webhooks`
+queue. New consumer worker reads, fetches subscription URL+secret, POSTs
+with `X-ICRV-Signature: sha256=…`, on non-2xx writes `next_retry_at` per
+30s/2m/10m schedule and re-enqueues; after 3 attempts marks `dlq`.
+
+### Auto bounce-count bump (Phase 5 partial)
+**Stubbed:** `contacts.bounce_count` exists and `/v1/bounces/clean` revokes
+consent for any contact whose count >= threshold. But nothing currently
+*increments* bounce_count — Gmail returns SMTP errors but we don't parse
+DSN messages out of the inbox.
+**Unblock:** in icrv-consumer's `processGmailPush`, detect `mailer-daemon`
+sender + `X-Failed-Recipients` header, look up the recipient's contact_id,
+`UPDATE contacts SET bounce_count = bounce_count + 1`. Soft-bounce vs hard
+classification by SMTP code prefix (5xx hard, 4xx soft).
+
+### WhatsApp Quotes (Phase 5 by design)
+**Stubbed:** `/whatsapp/quotes` renders a "Coming soon" card; no backend.
+**Unblock:** spec the conversation shape (price-list lookup, quote-id
+ingestion, follow-up automation) before implementation.
+
+## What failed and why
+None — every phase's preview verification was green and the live deploy
+shipped without rollback.
+
+## Manual steps still on the user (consolidated)
+
+1. **Cloudflare Access bypass list** — add the following paths to the Access
+   app for `icrv-api.americanironus.com` so unauthenticated callers can hit
+   them. Without this, unsubscribe links and tracking pixels return 401.
+   - `/u/*`           (CAN-SPAM unsubscribe)
+   - `/track/*`       (open pixel)
+   - `/r`             (click redirect)
+   - already bypassed: `/health`, `/csp-report`, `/oauth/google/callback`
+
+2. **CAN-SPAM physical address** — `/settings/compliance` will show a red
+   banner until set. Until you set it, every email send returns 422
+   (`compliance_address_missing`). This is intentional friction.
+
+3. **R2 lifecycle** for `icrv-uploads/imports/` — suggest 7-day retention
+   to avoid hoarding bulk-upload CSVs.
+
+4. **DNS for tracking domain (optional)** — if you want a branded tracking
+   host like `track.americanironus.com`, set up a CNAME pointing at
+   `icrv-api.americanironus.com`, then update `/settings/tracking →
+   custom_domain`. The icrv-email worker honours this when injecting
+   tracking URLs.
+
+5. **DKIM key generation** — the v2 build doesn't auto-generate the DKIM
+   keypair (deferred). Use Google Workspace's auto-DKIM or your DNS
+   provider's, paste the resulting public-key `p=…` into the expected
+   record on `/settings/authentication`, then click Check.
+
+6. **Cost caps** (per HARDENING_REPORT recommendation): ElevenLabs,
+   RingCentral, Anthropic, Cloudflare account-level caps.
+
+## Backlog (deferred features for future)
+
+- **Webhook delivery worker** with HMAC + retry + DLQ (see Phase 5 partial above).
+- **Gmail DSN parser** for auto-bounce counting (see Phase 5 partial above).
+- **Templates: drag-drop builder** — the current editor is textarea +
+  iframe preview, intentional per build prompt's "no drag-drop" decision.
+- **WhatsApp Quotes** end-to-end implementation.
+- **DKIM auto-keygen** + publish encrypted private key to KV.
+- **Code-split frontend bundle** (recharts + xlsx push the main bundle to
+  ~875 KB; current behaviour is OK but could be lazy-loaded).
+- **Personalization variables CRUD** in `/settings/personalization` (panel
+  is currently `Coming soon`; substitution backend already wired and
+  ready).
+
+## Recommended next 3 actions
+
+1. **Add the four Cloudflare Access bypass paths.** Until done, unsubscribe
+   links in delivered emails will not work — every recipient who clicks
+   them sees the Access login screen.
+2. **Set the CAN-SPAM physical address.** Sends are blocked until done.
+   Use `/settings/compliance` in the dashboard.
+3. **Trigger lead-score recalculation manually** via the "Recalculate All"
+   button on `/leads` so the dashboards have data before the nightly cron
+   runs at 03:00 UTC.
+
+## Verification one-liners
+
+```bash
+# Smoke test against production
+bash scripts/v2-verify.sh https://icrv.americanironus.com https://icrv-api.americanironus.com --skip-build
+
+# Inspect tracking events (after a test send + click)
+wrangler d1 execute icrv-db --remote --command="SELECT type, COUNT(*) FROM tracking_events GROUP BY type"
+
+# Re-score one tenant
+wrangler d1 execute icrv-db --remote --command="SELECT category, COUNT(*) FROM lead_scores GROUP BY category"
+
+# Inspect import jobs
+wrangler d1 execute icrv-db --remote --command="SELECT status, COUNT(*) FROM import_jobs GROUP BY status"
+
+# Re-apply migrations on a fresh tenant if needed
+wrangler d1 execute icrv-db --remote --file=migrations/0001_import_jobs.sql
+wrangler d1 execute icrv-db --remote --file=migrations/0002_tenant_settings.sql
+wrangler d1 execute icrv-db --remote --file=migrations/0003_tracking_events.sql
+wrangler d1 execute icrv-db --remote --file=migrations/0004_lead_scores.sql
+wrangler d1 execute icrv-db --remote --file=migrations/0005_phase5.sql
+```
 
 ## Rollback events
-(none yet)
+None.
 
-## Manual steps still on the user
-1. Cloudflare Access — add path bypasses for new public endpoints once Phase 2/3 land:
-   - `/track/*`
-   - `/r`
-   - `/u/*`
-   - (already bypassed: `/health`, `/csp-report`, `/oauth/google/callback`)
-2. R2 lifecycle rule for `icrv-uploads/imports/` — suggest 7-day retention (~30 sec dashboard)
-3. R2 lifecycle rule for `icrv-exports/d1-backups/` (already in place per make-it-real run; verify)
-4. CAN-SPAM physical address — `/settings/compliance` (after Phase 2 ships)
-5. Cost caps: ElevenLabs, RingCentral, Anthropic, Cloudflare (5 min)
-6. DNS for tracking domain (only if user later asks for one): track.americanironus.com → CNAME api.icrv.americanironus.com
+## Architecture decisions (single-line each, quick reference)
+
+- Bulk upload: chunked-queue via new `icrv-imports` queue + dedicated
+  `import_jobs` D1 table (kept legacy `upload_jobs` untouched).
+- Light mode: `:root[data-theme="light"]` CSS-var overrides; toggle in
+  Header; first-load reads OS preference.
+- Settings: section JSON blobs in `tenant_settings` (workspace, compliance,
+  sending, tracking, authentication, personalization, bounce, api_webhooks).
+- Public endpoints: `/u/:token`, `/track/open`, `/r` mounted on icrv-api
+  outside `/v1`; HMAC tokens with EMAIL_TRACK_KEY + UUID-token fallback for
+  unsubscribe.
+- Tracking: open pixel = HMAC-signed eid; click = `/r?u={b64url}&eid={hmac}`
+  with UTM auto-append.
+- Lead scoring: pure function in `@icrv/shared/scoring`; recalc inline on
+  /v1/leads/recalculate-all + nightly via icrv-cron.
+- Analytics: recharts only (no D3 / no plotly); period 7|30|90|all driven
+  by SQL `datetime('now','-N days')` cutoffs.
+- Templates: textarea HTML editor + sandboxed iframe preview; no drag-drop.
+- Regional Outreach: minimal in-house i18n (no react-intl), `dir="rtl"`
+  on container, locale persisted to localStorage.
+- WhatsApp Quotes: stub page, intentional.
