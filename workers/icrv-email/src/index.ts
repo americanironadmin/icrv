@@ -76,23 +76,28 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
   }
 
   // ── Phase 2: CAN-SPAM physical address gate + daily limit ────────────
+  // Transactional sends (consent requests, system notifications) bypass the
+  // marketing gate. CAN-SPAM § 7702(17) excludes transactional/relationship
+  // messages from the physical-address requirement; the daily-limit cap is
+  // a marketing safeguard so it doesn't apply either.
   const settings = await loadTenantSettings(env, p.tenant_id);
-  const street   = (settings.compliance.physical_address?.street ?? '').trim();
-  if (!street || street === '__PLACEHOLDER__') {
-    await env.DB.prepare(`UPDATE messages SET status='failed', error='compliance_address_missing', updated_at=? WHERE id=?`)
-      .bind(nowISO(), p.message_id).run();
-    throw new Error('compliance_address_missing');
-  }
+  if (!p.is_transactional) {
+    const street = (settings.compliance.physical_address?.street ?? '').trim();
+    if (!street || street === '__PLACEHOLDER__') {
+      await env.DB.prepare(`UPDATE messages SET status='failed', error='compliance_address_missing', updated_at=? WHERE id=?`)
+        .bind(nowISO(), p.message_id).run();
+      throw new Error('compliance_address_missing');
+    }
 
-  // Daily-limit gate (UTC day window).
-  const dailyLimit = Number(settings.sending.daily_limit ?? 500);
-  const sentToday = (await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM messages
-       WHERE tenant_id = ? AND channel = 'email' AND direction = 'outbound'
-         AND sent_at >= datetime('now','start of day')`,
-  ).bind(p.tenant_id).first<{ n: number }>())?.n ?? 0;
-  if (sentToday >= dailyLimit) {
-    throw new Error(`daily_limit_reached:${dailyLimit}`);
+    const dailyLimit = Number(settings.sending.daily_limit ?? 500);
+    const sentToday = (await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM messages
+         WHERE tenant_id = ? AND channel = 'email' AND direction = 'outbound'
+           AND sent_at >= datetime('now','start of day')`,
+    ).bind(p.tenant_id).first<{ n: number }>())?.n ?? 0;
+    if (sentToday >= dailyLimit) {
+      throw new Error(`daily_limit_reached:${dailyLimit}`);
+    }
   }
 
   // Get access token from OAuthRotatorDO
@@ -108,10 +113,10 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
   const trackingHost = p.tracking_domain || 'icrv-api.americanironus.com';
   const unsubUrl = await buildUnsubUrl(env, p, trackingHost);
   const personalized = await personalize(env, p, p.html_body);
-  const htmlBody = appendCanSpamFooter(
-    await injectTracking(personalized, p, trackingHost, env, settings),
-    settings, unsubUrl,
-  );
+  const tracked = await injectTracking(personalized, p, trackingHost, env, settings);
+  // Transactional sends (consent requests, system) carry their own
+  // body+footer — don't append the marketing CAN-SPAM block.
+  const htmlBody = p.is_transactional ? tracked : appendCanSpamFooter(tracked, settings, unsubUrl);
   const headersExtra: string[] = [
     `List-Unsubscribe: <${unsubUrl}>, <mailto:unsubscribe@${trackingHost}?subject=unsubscribe>`,
     'List-Unsubscribe-Post: List-Unsubscribe=One-Click',

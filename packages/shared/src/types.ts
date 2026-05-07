@@ -97,6 +97,10 @@ export interface EmailOutPayload extends QueuePayload {
   text_body?:      string;
   reply_to?:       string;
   tracking_domain: string;
+  // Transactional / consent / system messages bypass the CAN-SPAM physical-
+  // address gate and the daily marketing send-limit (still rate-limited via
+  // KV_RATE bucket). NEVER set this for marketing or campaign sends.
+  is_transactional?: boolean;
 }
 
 // ─── Email in (inbound Gmail push) ───────────────────────────────────────────

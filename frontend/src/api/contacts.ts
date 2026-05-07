@@ -91,4 +91,40 @@ export const contactsApi = {
 
   getUploadJob: (jobId: string): Promise<UploadJobStatus> =>
     get<UploadJobStatus>(`/v1/contacts/bulk-upload/${jobId}`),
+
+  // ── v2.6 bulk actions ────────────────────────────────────────────────
+  bulk: (body: BulkActionPayload): Promise<{ affected: number }> =>
+    post<{ affected: number }>('/v1/contacts/bulk', body as unknown as Record<string, unknown>),
+
+  consentRequest: (body: { filter: BulkFilter; only_pending?: boolean }):
+    Promise<{ requested: number; skipped_no_email: number; total_matched: number }> =>
+    post('/v1/contacts/consent-request', body as unknown as Record<string, unknown>),
+
+  consentSummary: (channel: 'email' | 'whatsapp' | 'voice' = 'email'):
+    Promise<{ channel: string; total: number; granted: number; revoked: number; pending: number; never_requested: number }> =>
+    get('/v1/contacts/consent-summary', { channel }),
 }
+
+// ── Bulk action payloads (matches workers/icrv-api/src/routes/contacts-bulk.ts) ──
+
+export interface BulkFilter {
+  all?:           boolean
+  ids?:           string[]
+  search?:        string
+  tag?:           string
+  country?:       string
+  industry?:      string
+  has_email?:     boolean
+  consent_state?: 'granted' | 'revoked' | 'pending' | 'none' | 'never_requested'
+  consent_channel?: 'email' | 'whatsapp' | 'voice'
+}
+
+export type BulkAction =
+  | { filter: BulkFilter; action: 'delete' }
+  | { filter: BulkFilter; action: 'add_tag';     params: { tag: string } }
+  | { filter: BulkFilter; action: 'remove_tag';  params: { tag: string } }
+  | { filter: BulkFilter; action: 'set_tags';    params: { tags: string[] } }
+  | { filter: BulkFilter; action: 'set_field';   params: { field: 'country_code' | 'country_name_ar' | 'industry' | 'industry_ar' | 'region_tier'; value: string | null } }
+  | { filter: BulkFilter; action: 'set_consent'; params: { channel: 'email' | 'whatsapp' | 'voice'; state: 'granted' | 'revoked' } }
+
+export type BulkActionPayload = BulkAction
