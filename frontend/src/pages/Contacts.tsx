@@ -486,7 +486,16 @@ function ContactDetail({ contact, onEdit, onDelete }: { contact: Contact; onEdit
 
 // ── Main Contacts Page ────────────────────────────────────────────────────────
 
+import type { BulkFilter } from '@/api/contacts'
+
+type ConsentStateFilter = 'any' | 'granted' | 'pending' | 'revoked' | 'never_requested'
+
+interface ConsentSummary {
+  total: number; granted: number; revoked: number; pending: number; never_requested: number
+}
+
 export default function Contacts() {
+  const { showToast } = useApp()
   const [contacts, setContacts] = useState<Contact[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -497,6 +506,29 @@ export default function Contacts() {
   const [showForm, setShowForm] = useState(false)
   const [editContact, setEditContact] = useState<Contact | undefined>()
   const [showUpload, setShowUpload] = useState(false)
+
+  // v2.6 — bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [selectAllMatching, setSelectAllMatching] = useState(false)
+  const [consentFilter, setConsentFilter] = useState<ConsentStateFilter>('any')
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkPrompt, setBulkPrompt] = useState<null | 'add_tag' | 'remove_tag' | 'set_field'>(null)
+  const [promptValue, setPromptValue] = useState('')
+  const [promptField, setPromptField] = useState<'country_code'|'industry'|'region_tier'|'country_name_ar'|'industry_ar'>('country_code')
+  const [summary, setSummary] = useState<ConsentSummary | null>(null)
+
+  const buildFilter = useCallback((): BulkFilter => {
+    if (selectAllMatching) {
+      return {
+        search: search || undefined,
+        consent_state: consentFilter === 'any' ? undefined : consentFilter,
+        consent_channel: 'email',
+      }
+    }
+    return { ids: Array.from(selectedIds) }
+  }, [selectAllMatching, search, consentFilter, selectedIds])
+
+  const selectedCount = selectAllMatching ? total : selectedIds.size
 
   const loadContacts = useCallback(async () => {
     setLoading(true)
@@ -511,13 +543,115 @@ export default function Contacts() {
     }
   }, [page, perPage, search])
 
-  useEffect(() => { loadContacts() }, [loadContacts])
+  const refreshSummary = useCallback(async () => {
+    try { setSummary(await contactsApi.consentSummary('email')) } catch { /* non-fatal */ }
+  }, [])
+
+  useEffect(() => { loadContacts(); refreshSummary() }, [loadContacts, refreshSummary])
 
   // Debounce search
   useEffect(() => {
     const t = setTimeout(() => { setPage(1); loadContacts() }, 400)
     return () => clearTimeout(t)
   }, [search]) // eslint-disable-line
+
+  // Clear selection when filter / search changes (the row population shifts).
+  useEffect(() => { setSelectedIds(new Set()); setSelectAllMatching(false) }, [consentFilter, search])
+
+  const toggleRow = (id: string) => {
+    setSelectAllMatching(false)
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const togglePage = () => {
+    if (selectAllMatching) { setSelectAllMatching(false); setSelectedIds(new Set()); return }
+    const allOnPageSelected = contacts.length > 0 && contacts.every((c) => selectedIds.has(c.id))
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allOnPageSelected) { for (const c of contacts) next.delete(c.id) }
+      else                   { for (const c of contacts) next.add(c.id) }
+      return next
+    })
+  }
+
+  const clearSelection = () => { setSelectedIds(new Set()); setSelectAllMatching(false) }
+
+  const runBulk = async (fn: () => Promise<{ affected: number }>, label: string) => {
+    if (selectedCount === 0) return
+    setBulkBusy(true)
+    try {
+      const r = await fn()
+      showToast({ type: 'success', title: label, message: `${r.affected.toLocaleString()} contact${r.affected === 1 ? '' : 's'} updated` })
+      clearSelection()
+      await loadContacts(); await refreshSummary()
+    } catch (e) {
+      showToast({ type: 'error', title: `${label} failed`, message: (e as Error).message })
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const onBulkDelete = () => {
+    if (selectedCount === 0) return
+    if (!confirm(`Delete ${selectedCount.toLocaleString()} contact${selectedCount === 1 ? '' : 's'}? This cannot be undone.`)) return
+    runBulk(() => contactsApi.bulk({ filter: buildFilter(), action: 'delete' }), 'Deleted')
+  }
+
+  const onAddTag = () => { setPromptValue(''); setBulkPrompt('add_tag') }
+  const onRemoveTag = () => { setPromptValue(''); setBulkPrompt('remove_tag') }
+  const onSetField = () => { setPromptValue(''); setPromptField('country_code'); setBulkPrompt('set_field') }
+  const onMarkConsented = () => runBulk(
+    () => contactsApi.bulk({ filter: buildFilter(), action: 'set_consent', params: { channel: 'email', state: 'granted' } }),
+    'Marked consented',
+  )
+  const onMarkRevoked = () => runBulk(
+    () => contactsApi.bulk({ filter: buildFilter(), action: 'set_consent', params: { channel: 'email', state: 'revoked' } }),
+    'Marked revoked',
+  )
+
+  const submitPrompt = () => {
+    const v = promptValue.trim()
+    if (!v && bulkPrompt !== 'set_field') { showToast({ type: 'error', title: 'Tag required' }); return }
+    if (bulkPrompt === 'add_tag') {
+      runBulk(() => contactsApi.bulk({ filter: buildFilter(), action: 'add_tag', params: { tag: v } }), `Tag added: ${v}`)
+    } else if (bulkPrompt === 'remove_tag') {
+      runBulk(() => contactsApi.bulk({ filter: buildFilter(), action: 'remove_tag', params: { tag: v } }), `Tag removed: ${v}`)
+    } else if (bulkPrompt === 'set_field') {
+      runBulk(
+        () => contactsApi.bulk({ filter: buildFilter(), action: 'set_field', params: { field: promptField, value: promptValue } }),
+        `Set ${promptField}`,
+      )
+    }
+    setBulkPrompt(null)
+  }
+
+  const sendConsent = async (onlyPending = false) => {
+    const filter = onlyPending
+      ? { consent_state: 'pending' as const, consent_channel: 'email' as const }
+      : buildFilter()
+    if (!onlyPending && selectedCount === 0) {
+      showToast({ type: 'error', title: 'Select contacts first' })
+      return
+    }
+    setBulkBusy(true)
+    try {
+      const r = await contactsApi.consentRequest({ filter, only_pending: onlyPending })
+      showToast({
+        type: 'success',
+        title: onlyPending ? 'Consent re-requests sent' : 'Consent requests sent',
+        message: `${r.requested} sent, ${r.skipped_no_email} skipped (no email)`,
+      })
+      clearSelection(); await refreshSummary()
+    } catch (e) {
+      showToast({ type: 'error', title: 'Send failed', message: (e as Error).message })
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   const totalPages = Math.ceil(total / perPage)
 
@@ -534,8 +668,29 @@ export default function Contacts() {
         </div>
       </div>
 
+      {/* Consent summary panel */}
+      {summary && (
+        <div style={{
+          display: 'flex', gap: '0.6rem', flexWrap: 'wrap',
+          marginBottom: '0.85rem', padding: '0.75rem 1rem',
+          background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
+          borderRadius: 'var(--radius-lg)', alignItems: 'center',
+        }}>
+          <span style={{ fontFamily: 'var(--font-display)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Email consent:</span>
+          <span className="badge badge-green">Consented {summary.granted.toLocaleString()}</span>
+          <span className="badge badge-yellow">Pending {summary.pending.toLocaleString()}</span>
+          <span className="badge badge-red">Revoked {summary.revoked.toLocaleString()}</span>
+          <span className="badge badge-gray">Never asked {summary.never_requested.toLocaleString()}</span>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy || summary.pending === 0}
+                  onClick={() => sendConsent(true)}>
+            Resend pending ({summary.pending.toLocaleString()})
+          </button>
+        </div>
+      )}
+
       {/* Search + Filter bar */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <div className="search-wrap">
           <span className="search-icon">⌕</span>
           <input
@@ -545,10 +700,45 @@ export default function Contacts() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <select className="form-control" style={{ width: 200 }} value={consentFilter} onChange={(e) => setConsentFilter(e.target.value as ConsentStateFilter)}>
+          <option value="any">All consent states</option>
+          <option value="granted">Consented</option>
+          <option value="pending">Awaiting consent</option>
+          <option value="revoked">Revoked</option>
+          <option value="never_requested">Never requested</option>
+        </select>
         <span className="text-xs text-muted">
-          {contacts.length} shown
+          {contacts.length} shown · {total.toLocaleString()} total
         </span>
       </div>
+
+      {/* Bulk action toolbar */}
+      {selectedCount > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap',
+          marginBottom: '0.85rem', padding: '0.6rem 0.85rem',
+          background: 'var(--accent-glow)', border: '1px solid var(--accent)',
+          borderRadius: 'var(--radius-lg)',
+        }}>
+          <span style={{ fontFamily: 'var(--font-display)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.82rem', color: 'var(--accent)' }}>
+            {selectedCount.toLocaleString()} selected
+          </span>
+          {!selectAllMatching && contacts.every((c) => selectedIds.has(c.id)) && total > selectedCount && (
+            <button className="btn btn-ghost btn-sm" onClick={() => { setSelectAllMatching(true); setSelectedIds(new Set()) }}>
+              Select all {total.toLocaleString()} matching
+            </button>
+          )}
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy} onClick={() => sendConsent(false)}>Request consent</button>
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy} onClick={onAddTag}>Add tag</button>
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy} onClick={onRemoveTag}>Remove tag</button>
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy} onClick={onSetField}>Set field…</button>
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy} onClick={onMarkConsented}>Mark consented</button>
+          <button className="btn btn-secondary btn-sm" disabled={bulkBusy} onClick={onMarkRevoked}>Mark revoked</button>
+          <button className="btn btn-ghost btn-sm" disabled={bulkBusy} onClick={onBulkDelete} style={{ color: 'var(--red)' }}>Delete</button>
+          <button className="btn btn-ghost btn-sm" onClick={clearSelection}>Clear</button>
+        </div>
+      )}
 
       {/* Two-panel layout */}
       <div style={{ display: 'grid', gridTemplateColumns: selected ? '1fr 300px' : '1fr', gap: '1rem' }}>
@@ -558,6 +748,22 @@ export default function Contacts() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select page"
+                      checked={contacts.length > 0 && (selectAllMatching || contacts.every((c) => selectedIds.has(c.id)))}
+                      ref={(el) => {
+                        if (el) {
+                          const some = contacts.some((c) => selectedIds.has(c.id))
+                          const all  = contacts.length > 0 && contacts.every((c) => selectedIds.has(c.id))
+                          el.indeterminate = !selectAllMatching && some && !all
+                        }
+                      }}
+                      onChange={togglePage}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </th>
                   <th>Name</th>
                   <th>Email</th>
                   <th>Phone</th>
@@ -570,14 +776,14 @@ export default function Contacts() {
                 {loading ? (
                   Array.from({ length: 8 }).map((_, i) => (
                     <tr key={i}>
-                      {Array.from({ length: 6 }).map((_, j) => (
+                      {Array.from({ length: 7 }).map((_, j) => (
                         <td key={j}><div className="skeleton" style={{ height: '12px', width: `${60 + Math.random() * 30}%` }} /></td>
                       ))}
                     </tr>
                   ))
                 ) : contacts.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>
+                    <td colSpan={7}>
                       <div className="empty-state">
                         <div className="empty-state-icon">◈</div>
                         <div className="empty-state-title">No contacts found</div>
@@ -594,6 +800,14 @@ export default function Contacts() {
                         background: selected?.id === c.id ? 'var(--bg-active)' : undefined,
                       }}
                     >
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${c.name}`}
+                          checked={selectAllMatching || selectedIds.has(c.id)}
+                          onChange={() => toggleRow(c.id)}
+                        />
+                      </td>
                       <td className="td-name">{c.name}</td>
                       <td className="td-mono">{c.email ?? '—'}</td>
                       <td className="td-mono">{c.phone ?? '—'}</td>
@@ -652,6 +866,48 @@ export default function Contacts() {
           onClose={() => setShowUpload(false)}
           onDone={() => { setShowUpload(false); loadContacts() }}
         />
+      )}
+
+      {bulkPrompt && (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setBulkPrompt(null)}>
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-header">
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                {bulkPrompt === 'add_tag' ? 'Add tag to selected' :
+                 bulkPrompt === 'remove_tag' ? 'Remove tag from selected' :
+                 'Set field on selected'}
+              </h3>
+              <button className="btn btn-ghost btn-icon" onClick={() => setBulkPrompt(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div className="text-xs text-muted">
+                Will affect {selectedCount.toLocaleString()} contact{selectedCount === 1 ? '' : 's'}.
+              </div>
+              {bulkPrompt === 'set_field' && (
+                <div>
+                  <div className="section-label">Field</div>
+                  <select className="form-control" value={promptField} onChange={(e) => setPromptField(e.target.value as typeof promptField)}>
+                    <option value="country_code">country_code (e.g. SA, AE)</option>
+                    <option value="country_name_ar">country_name_ar</option>
+                    <option value="industry">industry (e.g. construction, oil_gas)</option>
+                    <option value="industry_ar">industry_ar</option>
+                    <option value="region_tier">region_tier (e.g. tier1, tier2)</option>
+                  </select>
+                </div>
+              )}
+              <div>
+                <div className="section-label">{bulkPrompt === 'set_field' ? 'Value (empty = clear)' : 'Tag'}</div>
+                <input className="form-control" autoFocus value={promptValue}
+                       onChange={(e) => setPromptValue(e.target.value)}
+                       onKeyDown={(e) => e.key === 'Enter' && submitPrompt()} />
+              </div>
+            </div>
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button className="btn btn-ghost" onClick={() => setBulkPrompt(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={bulkBusy} onClick={submitPrompt}>Apply</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

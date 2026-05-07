@@ -29,7 +29,8 @@ import { createLeadsRouter } from './routes/leads';
 import { createAnalyticsRouter } from './routes/analytics';
 import { createApiKeysRouter } from './routes/api-keys';
 import { createBouncesRouter } from './routes/bounces';
-import { handleUnsubscribe, handleTrackOpen, handleTrackClick } from './routes/public';
+import { createContactsBulkRouter } from './routes/contacts-bulk';
+import { handleUnsubscribe, handleTrackOpen, handleTrackClick, handleConsentResponse } from './routes/public';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
 import { scrubPii } from '@icrv/shared/sentry-scrub';
@@ -98,6 +99,8 @@ app.get('/health', (c) => c.json({ ok: true, service: 'icrv-api', ts: new Date()
 app.get('/u/:token', handleUnsubscribe);
 app.get('/track/open', handleTrackOpen);
 app.get('/r', handleTrackClick);
+// /consent/:token?action=accept|decline — v2.6 consent capture (PUBLIC, must be on Access bypass)
+app.get('/consent/:token', handleConsentResponse);
 
 // CSP violation receiver. No auth, no CORS — browsers POST these directly.
 // Accepts both `application/csp-report` (legacy) and `application/reports+json`.
@@ -229,7 +232,8 @@ v1.use('*', authMiddleware);
 
 v1.route('/auth',      createAuthRouter());
 v1.route('/admin',     createAdminRouter());
-v1.route('/contacts',  createContactsRouter());
+v1.route('/contacts',  createContactsBulkRouter());  // /bulk + /consent-request + /consent-summary
+v1.route('/contacts',  createContactsRouter());      // CRUD + bulk-upload
 v1.route('/campaigns', createCampaignsRouter());
 v1.route('/templates', createTemplatesRouter());
 v1.route('/calls',     createCallsRouter());

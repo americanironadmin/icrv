@@ -186,6 +186,77 @@ export async function handleTrackOpen(c: Context<{ Bindings: ApiEnv }>): Promise
   });
 }
 
+// ─── /consent/:token  — capture accept/decline (PUBLIC, v2.6) ─────────────
+
+export async function handleConsentResponse(c: Context<{ Bindings: ApiEnv }>): Promise<Response> {
+  const token = c.req.param('token');
+  if (!token) return c.html(consentPage('Missing token', false), 400);
+  const action = (c.req.query('action') ?? 'accept').toLowerCase();
+  if (action !== 'accept' && action !== 'decline') {
+    return c.html(consentPage('Unknown action', false), 400);
+  }
+
+  const secret = c.env.EMAIL_TRACK_KEY || c.env.JWT_SIGNING_KEY;
+  const claims = secret ? await verifyToken(secret, token) : null;
+  if (!claims || typeof claims !== 'object') {
+    return c.html(consentPage('Invalid or expired link', false), 400);
+  }
+  const tenant_id  = claims.tenant_id  as string | undefined;
+  const contact_id = claims.contact_id as string | undefined;
+  const channel    = (claims.channel as string | undefined) ?? 'email';
+  if (!tenant_id || !contact_id) {
+    return c.html(consentPage('Invalid link payload', false), 400);
+  }
+
+  // The token must still be the live request_token on the consents row — this
+  // protects against replay after a re-request (which mints a new token).
+  const row = await c.env.DB.prepare(
+    `SELECT request_token FROM consents
+       WHERE tenant_id = ? AND contact_id = ? AND channel = ? LIMIT 1`,
+  ).bind(tenant_id, contact_id, channel).first<{ request_token: string | null }>();
+  if (!row || (row.request_token && row.request_token !== token)) {
+    return c.html(consentPage('This consent link has been superseded by a newer request.', false), 410);
+  }
+
+  const now = nowISO();
+  const newState = action === 'accept' ? 'granted' : 'revoked';
+  await c.env.DB.prepare(
+    `INSERT INTO consents (id, tenant_id, contact_id, channel, consent_state, recorded_at, updated_at, granted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, contact_id, channel)
+     DO UPDATE SET consent_state = excluded.consent_state,
+                   updated_at    = excluded.updated_at,
+                   granted_at    = CASE WHEN excluded.consent_state = 'granted' THEN excluded.granted_at ELSE consents.granted_at END`,
+  ).bind(uuidv4(), tenant_id, contact_id, channel, newState, now, now, action === 'accept' ? now : null).run();
+
+  return c.html(consentPage(
+    action === 'accept' ? 'Thanks — you are now subscribed.' : 'You have been removed. We will not send you marketing emails.',
+    true,
+  ));
+}
+
+function consentPage(message: string, ok: boolean): string {
+  const color = ok ? '#16a34a' : '#dc2626';
+  return `<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Consent — ICRV</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f7f8fa; color: #0a0c0f; margin: 0; padding: 2rem; }
+    .card { max-width: 480px; margin: 4rem auto; background: #fff; border-radius: 8px; padding: 2.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.08); text-align: center; }
+    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; color: ${color}; }
+    p  { color: #4b5563; line-height: 1.6; }
+  </style>
+</head><body>
+  <div class="card">
+    <h1>${ok ? 'Thank you' : 'Consent error'}</h1>
+    <p>${message}</p>
+  </div>
+</body></html>`;
+}
+
 // ─── /r?u=<b64url>&eid=...  — click redirect (PUBLIC) ─────────────────────
 
 export async function handleTrackClick(c: Context<{ Bindings: ApiEnv }>): Promise<Response> {
