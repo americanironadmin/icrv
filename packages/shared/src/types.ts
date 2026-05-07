@@ -32,6 +32,9 @@ export interface BaseEnv {
   // (icrv-api producer, icrv-consumer consumer). Optional on BaseEnv to keep
   // other workers from having to declare an unused binding.
   Q_IMPORT?:        Queue<ImportJobPayload>;
+  // Q_WEBHOOK fans out HMAC-signed customer webhooks. Producer = icrv-api +
+  // icrv-consumer; consumer = icrv-consumer.
+  Q_WEBHOOK?:       Queue<WebhookEventPayload>;
   Q_RETRY:          Queue<RetryPayload>;
   Q_DLQ:            Queue<QueuePayload>;
 
@@ -185,6 +188,33 @@ export interface ImportJobPayload extends QueuePayload {
   r2_key:      string;
   // Set when this is a continuation chunk (resumed processing).
   start_row?:  number;
+}
+
+// ─── Webhook fan-out (v2.7) ─────────────────────────────────────────────────
+
+export type WebhookEvent =
+  | 'email_sent'
+  | 'email_opened'
+  | 'email_clicked'
+  | 'email_bounced'
+  | 'email_unsubscribed'
+  | 'consent_granted'
+  | 'consent_revoked'
+  | 'call_completed'
+  | 'quote_sent'
+  | 'quote_accepted';
+
+export interface WebhookEventPayload extends QueuePayload {
+  type:            'webhook_event';
+  delivery_id:     string;
+  subscription_id: string;
+  event:           WebhookEvent;
+  url:             string;
+  secret:          string;
+  body:            Record<string, unknown>;
+  // 0 = first try; 1 = first retry; etc.
+  // The retry schedule is 30s / 2m / 10m, then DLQ.
+  attempt_no:      number;
 }
 
 // ─── Agent jobs ──────────────────────────────────────────────────────────────

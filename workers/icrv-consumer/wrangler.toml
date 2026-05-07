@@ -63,6 +63,14 @@ queue              = "icrv-imports"
 max_batch_size     = 1
 max_retries        = 3
 dead_letter_queue  = "icrv-dlq"
+# v2.7: customer webhook delivery. Per-message retries are handled in-app
+# (30s / 2m / 10m) via Q_RETRY; max_retries=1 here just means "if our handler
+# explodes during delivery, the queue retries once before DLQ".
+[[queues.consumers]]
+queue              = "icrv-webhooks"
+max_batch_size     = 5
+max_retries        = 1
+dead_letter_queue  = "icrv-dlq"
 
 [[queues.producers]]
 queue   = "icrv-email-out"
@@ -85,6 +93,9 @@ binding = "Q_AGENT"
 [[queues.producers]]
 queue   = "icrv-imports"
 binding = "Q_IMPORT"
+[[queues.producers]]
+queue   = "icrv-webhooks"
+binding = "Q_WEBHOOK"
 [[queues.producers]]
 queue   = "icrv-retry"
 binding = "Q_RETRY"

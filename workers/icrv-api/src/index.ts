@@ -30,6 +30,8 @@ import { createAnalyticsRouter } from './routes/analytics';
 import { createApiKeysRouter } from './routes/api-keys';
 import { createBouncesRouter } from './routes/bounces';
 import { createContactsBulkRouter } from './routes/contacts-bulk';
+import { createQuotesRouter } from './routes/quotes';
+import { createWebhooksRouter } from './routes/webhooks';
 import { handleUnsubscribe, handleTrackOpen, handleTrackClick, handleConsentResponse } from './routes/public';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
@@ -245,6 +247,8 @@ v1.route('/auth',      createEmailAuthRouter());  // /v1/auth/check-{dkim,spf,dm
 v1.route('/leads',     createLeadsRouter());
 v1.route('/analytics', createAnalyticsRouter());
 v1.route('/bounces',   createBouncesRouter());
+v1.route('/quotes',    createQuotesRouter());
+v1.route('/webhooks',  createWebhooksRouter());
 
 // /v1/agent-controls/* — defense-in-depth: viewers blocked at the gateway in
 // addition to whatever icrv-agent enforces internally. Closes the M6 risk where

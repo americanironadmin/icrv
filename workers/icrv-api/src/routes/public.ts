@@ -10,6 +10,7 @@ import type { Context } from 'hono';
 import { uuidv4, nowISO } from '@icrv/shared/crypto';
 import type { ApiEnv } from '../env';
 import { loadSection } from './settings';
+import { enqueueWebhooksForEvent } from './webhooks';
 
 // 1×1 transparent PNG (43 bytes)
 const PIXEL_PNG = Uint8Array.from([
@@ -228,6 +229,18 @@ export async function handleConsentResponse(c: Context<{ Bindings: ApiEnv }>): P
                    updated_at    = excluded.updated_at,
                    granted_at    = CASE WHEN excluded.consent_state = 'granted' THEN excluded.granted_at ELSE consents.granted_at END`,
   ).bind(uuidv4(), tenant_id, contact_id, channel, newState, now, now, action === 'accept' ? now : null).run();
+
+  // Customer webhook fan-out (best-effort; failure here doesn't break the
+  // recipient-facing confirmation page).
+  try {
+    await enqueueWebhooksForEvent(
+      c.env, tenant_id,
+      action === 'accept' ? 'consent_granted' : 'consent_revoked',
+      { tenant_id, contact_id, channel, occurred_at: now },
+    );
+  } catch (err) {
+    console.warn('[consent] webhook enqueue failed', (err as Error).message);
+  }
 
   return c.html(consentPage(
     action === 'accept' ? 'Thanks — you are now subscribed.' : 'You have been removed. We will not send you marketing emails.',

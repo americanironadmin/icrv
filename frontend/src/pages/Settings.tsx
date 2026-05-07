@@ -95,7 +95,7 @@ export default function Settings() {
         <Route path="sending"         element={<SendingPanel />} />
         <Route path="tracking"        element={<TrackingPanel />} />
         <Route path="authentication"  element={<AuthenticationPanel />} />
-        <Route path="personalization" element={<ComingSoon name="Personalization" />} />
+        <Route path="personalization" element={<PersonalizationPanel />} />
         <Route path="bounces"         element={<BouncesPanel />} />
         <Route path="api-webhooks"    element={<ApiWebhooksPanel />} />
       </Routes>
@@ -356,16 +356,17 @@ function GeneralPanel() {
 
 function CompliancePanel() {
   const { data, setData, loaded, busy, save } = useSection<ComplianceSettings>('compliance', {
-    physical_address: { street: '__PLACEHOLDER__', city: '', state: '', zip: '', country: 'US' },
+    physical_address: { street: '', city: '', state: '', zip: '', country: 'US' },
     unsubscribe_text: 'To stop receiving these emails, unsubscribe here: {{unsubscribe_url}}',
   })
   if (!loaded) return <div style={{ color: 'var(--text-muted)' }}>Loading…</div>
 
-  const isPlaceholder = data.physical_address.street === '__PLACEHOLDER__' || !data.physical_address.street.trim()
+  const a = data.physical_address
+  const incomplete = !a.street.trim() || !a.city.trim() || !a.state.trim() || !a.zip.trim()
 
   return (
     <>
-      {isPlaceholder && (
+      {incomplete && (
         <div style={{
           padding: '0.85rem 1rem',
           marginBottom: '1rem',
@@ -375,7 +376,7 @@ function CompliancePanel() {
           color: 'var(--red)',
           fontSize: '0.85rem',
         }}>
-          ⚠ Add your physical address before sending real campaigns — required by CAN-SPAM (US) and similar laws elsewhere. Sends will be blocked (HTTP 422) until you do.
+          ⚠ Add your full physical address (street, city, state, zip) before sending marketing campaigns — required by CAN-SPAM (US) and similar laws elsewhere. Sends will be rejected with `compliance_address_incomplete` until you do.
         </div>
       )}
       <Card title="CAN-SPAM Physical Address" subtitle="Included automatically in every email footer. Required by US law for marketing email."
@@ -538,6 +539,29 @@ function AuthenticationPanel() {
   }
 
   const copy = (s: string) => { navigator.clipboard?.writeText(s); showToast({ type: 'success', title: 'Copied' }) }
+  const [generating, setGenerating] = useState(false)
+  const generateDkim = async (rotate = false) => {
+    setGenerating(true)
+    try {
+      const res = await fetch((import.meta.env.VITE_API_BASE_URL || 'https://icrv-api.americanironus.com') + '/v1/auth/generate-dkim', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selector: data.dkim_selector, rotate }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json() as { selector: string; public_key_b64: string; rotated: boolean }
+      setData({ ...data, dkim_selector: json.selector, dkim_public_key: json.public_key_b64 })
+      showToast({
+        type: 'success',
+        title: json.rotated ? 'DKIM key rotated' : 'DKIM key ready',
+        message: 'Copy the TXT record below to your DNS provider.',
+      })
+    } catch (e) {
+      showToast({ type: 'error', title: 'Generate failed', message: (e as Error).message })
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   return (
     <>
@@ -561,6 +585,11 @@ function AuthenticationPanel() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <span style={{ color, fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{status}</span>
               <div style={{ display: 'flex', gap: '0.4rem' }}>
+                {kind === 'dkim' && (
+                  <button className="btn btn-secondary btn-sm" disabled={generating} onClick={() => generateDkim(!!data.dkim_public_key)}>
+                    {generating ? 'Generating…' : data.dkim_public_key ? 'Rotate key' : 'Generate key'}
+                  </button>
+                )}
                 <button className="btn btn-ghost btn-sm" onClick={() => copy(expected)}>Copy</button>
                 <button className="btn btn-secondary btn-sm" disabled={checking === kind} onClick={() => check(kind)}>
                   {checking === kind ? 'Checking…' : 'Check'}
@@ -730,14 +759,160 @@ function ApiWebhooksPanel() {
   )
 }
 
-// ── Coming Soon ────────────────────────────────────────────────────────────
+// ── Personalization (custom variables) ─────────────────────────────────────
+// Variables surface as `{{var_name}}` inside email templates. icrv-email's
+// personalize() resolves in this order:
+//   1. contacts.custom_fields_json[var_name]
+//   2. tenant_settings.personalization_json.variables[].default_value
+//   3. ''  (silent empty)
 
-function ComingSoon({ name }: { name: string }) {
+interface PersonalizationVar {
+  name:           string
+  default_value?: string
+  description?:   string
+}
+
+interface PersonalizationData {
+  variables: PersonalizationVar[]
+}
+
+const VAR_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_.]{0,63}$/
+
+function PersonalizationPanel() {
+  const { showToast } = useApp()
+  const [data, setData] = useState<PersonalizationData>({ variables: [] })
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState<PersonalizationVar>({ name: '', default_value: '', description: '' })
+
+  useEffect(() => {
+    settingsApi.getSection<PersonalizationData>('personalization')
+      .then((d) => { setData({ variables: Array.isArray(d.variables) ? d.variables : [] }); setLoaded(true) })
+      .catch(() => { setLoaded(true) })
+  }, [])
+
+  const persist = async (next: PersonalizationData) => {
+    setBusy(true)
+    try {
+      const saved = await settingsApi.saveSection<PersonalizationData>('personalization', next as never)
+      setData({ variables: Array.isArray(saved.variables) ? saved.variables : [] })
+      showToast({ type: 'success', title: 'Saved' })
+    } catch (e) {
+      showToast({ type: 'error', title: 'Save failed', message: (e as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const addVariable = async () => {
+    const name = draft.name.trim()
+    if (!name) { showToast({ type: 'error', title: 'Name required' }); return }
+    if (!VAR_NAME_RE.test(name)) {
+      showToast({ type: 'error', title: 'Invalid name', message: 'Use letters, digits, _ and . — start with a letter, max 64 chars.' })
+      return
+    }
+    if (data.variables.some((v) => v.name === name)) {
+      showToast({ type: 'error', title: 'Duplicate', message: `Variable ${name} already exists` })
+      return
+    }
+    const next = {
+      variables: [...data.variables, {
+        name,
+        default_value: draft.default_value?.trim() || '',
+        description:   draft.description?.trim()   || '',
+      }],
+    }
+    await persist(next)
+    setDraft({ name: '', default_value: '', description: '' })
+  }
+
+  const updateVariable = async (idx: number, patch: Partial<PersonalizationVar>) => {
+    const next = { variables: data.variables.map((v, i) => i === idx ? { ...v, ...patch } : v) }
+    await persist(next)
+  }
+
+  const removeVariable = async (idx: number) => {
+    if (!confirm(`Remove variable {{${data.variables[idx].name}}}?`)) return
+    await persist({ variables: data.variables.filter((_, i) => i !== idx) })
+  }
+
+  if (!loaded) return <div style={{ color: 'var(--text-muted)' }}>Loading…</div>
+
   return (
-    <div className="empty-state">
-      <div className="empty-state-icon">⌖</div>
-      <div className="empty-state-title">{name} — coming soon</div>
-      <div className="empty-state-body">This panel will land in a later build phase.</div>
-    </div>
+    <>
+      <Card title="Custom variables" subtitle="Use {{var_name}} in templates. Falls back to the default value when a contact has no override.">
+        {data.variables.length === 0 ? (
+          <div className="empty-state" style={{ padding: '1.5rem 1rem' }}>
+            <div className="empty-state-icon">{'{ }'}</div>
+            <div className="empty-state-title">No variables yet</div>
+            <div className="empty-state-body">Define one below to start personalising emails.</div>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 200 }}>Variable</th>
+                <th>Default value</th>
+                <th>Description</th>
+                <th style={{ width: 64 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.variables.map((v, i) => (
+                <tr key={v.name}>
+                  <td className="td-mono">{`{{${v.name}}}`}</td>
+                  <td>
+                    <input
+                      style={{ ...inputStyle, padding: '0.35rem 0.5rem' }}
+                      defaultValue={v.default_value ?? ''}
+                      onBlur={(e) => {
+                        const newValue = e.target.value
+                        if (newValue !== (v.default_value ?? '')) updateVariable(i, { default_value: newValue })
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      style={{ ...inputStyle, padding: '0.35rem 0.5rem' }}
+                      defaultValue={v.description ?? ''}
+                      onBlur={(e) => {
+                        const newValue = e.target.value
+                        if (newValue !== (v.description ?? '')) updateVariable(i, { description: newValue })
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => removeVariable(i)}>Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card title="Add variable">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '0.5rem', alignItems: 'end' }}>
+          <Field label="Name" hint="Letters, digits, _ . (e.g. dealer_region)">
+            <input style={inputStyle} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="company_segment" />
+          </Field>
+          <Field label="Default value">
+            <input style={inputStyle} value={draft.default_value ?? ''} onChange={(e) => setDraft({ ...draft, default_value: e.target.value })} placeholder="" />
+          </Field>
+          <Field label="Description (operator note)">
+            <input style={inputStyle} value={draft.description ?? ''} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+          </Field>
+          <button className="btn btn-primary" disabled={busy} onClick={addVariable}>Add</button>
+        </div>
+      </Card>
+
+      <Card title="Built-in variables (always available)">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem', fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+          {['{{contact.name}}','{{contact.email}}','{{contact.phone}}','{{contact.country}}','{{contact.industry}}','{{campaign.name}}','{{workspace.company}}','{{unsubscribe_url}}'].map((v) => (
+            <code key={v} style={{ background: 'var(--bg-base)', padding: '0.25rem 0.4rem', borderRadius: 'var(--radius-sm)' }}>{v}</code>
+          ))}
+        </div>
+      </Card>
+    </>
   )
 }
