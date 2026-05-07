@@ -29,7 +29,11 @@ import CallMonitoring from './pages/CallMonitoring'
 import Settings       from './pages/Settings'
 import LeadIntelligence from './pages/LeadIntelligence'
 import Analytics      from './pages/Analytics'
+import Templates      from './pages/Templates'
+import RegionalOutreach from './pages/RegionalOutreach'
+import WhatsAppQuotes from './pages/WhatsAppQuotes'
 import NotFound       from './pages/NotFound'
+import './i18n'   // initial dir/lang setup
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://icrv-api.americanironus.com'
@@ -183,6 +187,9 @@ export default function App() {
             <Route path="/calls"       element={<RouteErrorBoundary routeLabel="CALL MONITORING"><CallMonitoring /></RouteErrorBoundary>} />
             <Route path="/leads/*"     element={<RouteErrorBoundary routeLabel="LEAD INTELLIGENCE"><LeadIntelligence /></RouteErrorBoundary>} />
             <Route path="/analytics"   element={<RouteErrorBoundary routeLabel="ANALYTICS"><Analytics /></RouteErrorBoundary>} />
+            <Route path="/templates"   element={<RouteErrorBoundary routeLabel="TEMPLATES"><Templates /></RouteErrorBoundary>} />
+            <Route path="/regional"    element={<RouteErrorBoundary routeLabel="REGIONAL OUTREACH"><RegionalOutreach /></RouteErrorBoundary>} />
+            <Route path="/whatsapp/quotes" element={<RouteErrorBoundary routeLabel="WHATSAPP QUOTES"><WhatsAppQuotes /></RouteErrorBoundary>} />
             <Route path="/settings/*"  element={<RouteErrorBoundary routeLabel="SETTINGS"><Settings /></RouteErrorBoundary>} />
             <Route path="*"            element={<NotFound />} />
           </Routes>

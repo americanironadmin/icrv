@@ -20,6 +20,9 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/calls',   icon: '◎', label: 'Call Monitor',sublabel: 'Voice' },
   { path: '/leads',   icon: '◆', label: 'Leads',       sublabel: 'Intelligence' },
   { path: '/analytics',icon:'∞', label: 'Analytics',   sublabel: 'Insights' },
+  { path: '/templates',icon:'▤', label: 'Templates',   sublabel: 'Library' },
+  { path: '/regional',icon: '◯', label: 'Regional',    sublabel: 'ME Outreach' },
+  { path: '/whatsapp/quotes',icon:'◐', label: 'WA Quotes', sublabel: 'Coming soon' },
   { path: '/settings',icon: '⚙', label: 'Settings',    sublabel: 'Workspace' },
 ]
 

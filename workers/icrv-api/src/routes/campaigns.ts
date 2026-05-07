@@ -315,18 +315,56 @@ export function createTemplatesRouter(): Hono<HonoCtx> {
     const where: string[] = ['tenant_id = ?']; const binds: unknown[] = [tenantId];
     if (q.channel) { where.push('channel = ?'); binds.push(q.channel); }
     const r = await c.env.DB.prepare(
-      `SELECT id, name, channel, subject, body_html, body_text, template_name, template_language, created_at
+      `SELECT id, name, channel, subject, body_html, body_text, template_name, template_language, tags_json, created_at
        FROM templates WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 200`,
     ).bind(...binds).all<{
       id: string; name: string; channel: string;
       subject?: string|null; body_html?: string|null; body_text?: string|null;
-      template_name?: string|null; template_language?: string|null; created_at: string;
+      template_name?: string|null; template_language?: string|null;
+      tags_json?: string|null; created_at: string;
     }>();
     return c.json({ templates: (r.results ?? []).map(t => ({
       id: t.id, name: t.name, channel: t.channel,
       subject: t.subject ?? undefined, body_html: t.body_html ?? undefined, body_text: t.body_text ?? undefined,
-      template_name: t.template_name ?? undefined, created_at: t.created_at,
+      template_name: t.template_name ?? undefined,
+      tags: t.tags_json ? safeJson(t.tags_json) : [],
+      created_at: t.created_at,
     })) });
+  });
+
+  app.put('/:id', async (c) => {
+    if (c.get('user_role') === 'viewer') return c.json({ error: 'forbidden' }, 403);
+    const tenantId = c.get('tenant_id');
+    const id = c.req.param('id');
+    const body = await c.req.json<{
+      name?: string; channel?: string; subject?: string;
+      body_html?: string; body_text?: string; tags?: string[];
+    }>();
+    const sets: string[] = []; const binds: unknown[] = [];
+    if (body.name !== undefined)      { sets.push('name=?');       binds.push(body.name); }
+    if (body.channel !== undefined)   { sets.push('channel=?');    binds.push(body.channel); }
+    if (body.subject !== undefined)   { sets.push('subject=?');    binds.push(body.subject); }
+    if (body.body_html !== undefined) { sets.push('body_html=?');  binds.push(body.body_html); sets.push('content_html=?'); binds.push(body.body_html); }
+    if (body.body_text !== undefined) { sets.push('body_text=?');  binds.push(body.body_text); sets.push('content_text=?'); binds.push(body.body_text); }
+    if (body.tags !== undefined)      { sets.push('tags_json=?');  binds.push(JSON.stringify(body.tags)); }
+    if (!sets.length) return c.json({ error: 'no_changes' }, 400);
+    binds.push(id, tenantId);
+    const res = await c.env.DB.prepare(
+      `UPDATE templates SET ${sets.join(', ')} WHERE id=? AND tenant_id=?`,
+    ).bind(...binds).run();
+    if ((res.meta?.changes ?? 0) === 0) return c.json({ error: 'not_found' }, 404);
+    return c.json({ id, ok: true });
+  });
+
+  app.delete('/:id', async (c) => {
+    if (c.get('user_role') === 'viewer') return c.json({ error: 'forbidden' }, 403);
+    const tenantId = c.get('tenant_id');
+    const id = c.req.param('id');
+    const res = await c.env.DB.prepare(
+      `DELETE FROM templates WHERE id=? AND tenant_id=?`,
+    ).bind(id, tenantId).run();
+    if ((res.meta?.changes ?? 0) === 0) return c.json({ error: 'not_found' }, 404);
+    return c.json({ deleted: true });
   });
 
   app.post('/', async (c) => {
@@ -364,4 +402,9 @@ export function createTemplatesRouter(): Hono<HonoCtx> {
   });
 
   return app;
+}
+
+function safeJson(s: string): unknown[] {
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; }
+  catch { return []; }
 }
