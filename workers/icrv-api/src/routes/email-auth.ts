@@ -5,6 +5,7 @@
 
 import { Hono } from 'hono';
 import type { HonoCtx } from '../env';
+import { encryptSecret, nowISO } from '@icrv/shared/crypto';
 
 interface DohAnswer { name: string; type: number; TTL: number; data: string }
 interface DohResponse { Status: number; Answer?: DohAnswer[] }
@@ -66,5 +67,77 @@ export function createEmailAuthRouter(): Hono<HonoCtx> {
     });
   });
 
+  // ── POST /v1/auth/generate-dkim ─────────────────────────────────────
+  // Generates an RSA-2048 keypair, stores private key encrypted with
+  // MASTER_KEK in KV_CONFIG, returns the public key as the SPKI base64
+  // string (the `p=…` portion of the DKIM TXT record).
+  app.post('/generate-dkim', async (c) => {
+    if (c.get('user_role') !== 'admin') return c.json({ error: 'forbidden' }, 403);
+    const tenantId = c.get('tenant_id');
+    const body = await c.req.json<{ selector?: string; rotate?: boolean }>()
+      .catch(() => ({} as { selector?: string; rotate?: boolean }));
+    const selector = (body.selector ?? 'icrv').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || 'icrv';
+
+    const kvKey = `dkim:${tenantId}:${selector}`;
+    if (!body.rotate) {
+      const existing = await c.env.KV_CONFIG.get(kvKey, 'json') as { public_key_b64?: string } | null;
+      if (existing?.public_key_b64) {
+        return c.json({ selector, public_key_b64: existing.public_key_b64, rotated: false });
+      }
+    }
+
+    const pair = await crypto.subtle.generateKey(
+      { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([0x01, 0x00, 0x01]), hash: 'SHA-256' },
+      true,
+      ['sign', 'verify'],
+    ) as CryptoKeyPair;
+
+    const spki = await crypto.subtle.exportKey('spki', pair.publicKey);
+    const pkcs8 = await crypto.subtle.exportKey('pkcs8', pair.privateKey);
+    const publicB64  = btoa(String.fromCharCode(...new Uint8Array(spki)));
+    const privateB64 = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+
+    const enc = await encryptSecret(privateB64, c.env.MASTER_KEK, tenantId, 1);
+    const stored = {
+      selector,
+      public_key_b64:   publicB64,
+      private_cipher:   enc.cipher_text,
+      private_iv:       enc.iv,
+      private_auth_tag: enc.auth_tag,
+      key_version:      enc.key_version,
+      created_at:       nowISO(),
+    };
+    await c.env.KV_CONFIG.put(kvKey, JSON.stringify(stored));
+
+    // Mirror selector + public key into tenant_settings.authentication_json
+    // so the verifier UI shows the right `p=…` without re-fetching from KV.
+    const cur = await c.env.DB.prepare(
+      `SELECT authentication_json FROM tenant_settings WHERE tenant_id=?`,
+    ).bind(tenantId).first<{ authentication_json: string }>();
+    const auth: Record<string, unknown> = cur?.authentication_json
+      ? safeParse(cur.authentication_json) : {};
+    auth.dkim_selector = selector;
+    auth.dkim_public_key = publicB64;
+    auth.dkim_generated_at = nowISO();
+    await c.env.DB.prepare(
+      `INSERT INTO tenant_settings (tenant_id, authentication_json, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(tenant_id) DO UPDATE SET
+         authentication_json=excluded.authentication_json,
+         updated_at=excluded.updated_at`,
+    ).bind(tenantId, JSON.stringify(auth), nowISO()).run();
+
+    return c.json({
+      selector,
+      public_key_b64: publicB64,
+      rotated: !!body.rotate,
+      dns_record: `${selector}._domainkey TXT "v=DKIM1; k=rsa; p=${publicB64}"`,
+    });
+  });
+
   return app;
+}
+
+function safeParse(s: string): Record<string, unknown> {
+  try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; }
 }

@@ -45,10 +45,10 @@ const DEFAULTS: Record<Section, Record<string, unknown>> = {
   },
   compliance: {
     physical_address: {
-      street: '__PLACEHOLDER__',
-      city:   '',
-      state:  '',
-      zip:    '',
+      street:  '',
+      city:    '',
+      state:   '',
+      zip:     '',
       country: 'US',
     },
     unsubscribe_text: 'To stop receiving these emails, unsubscribe here: {{unsubscribe_url}}',

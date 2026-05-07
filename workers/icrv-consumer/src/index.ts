@@ -13,10 +13,12 @@
 
 import type {
   BaseEnv, InboundEmailPayload, RetryPayload, QueuePayload, ImportJobPayload,
+  WebhookEventPayload,
 } from '@icrv/shared/types';
 import { uuidv4, nowISO } from '@icrv/shared/crypto';
 import { isDuplicate } from '@icrv/shared/queue-helpers';
 import { processImportJob } from './import-processor';
+import { processWebhookEvent } from './webhook-delivery';
 
 interface ConsumerEnv extends BaseEnv {
   GOOGLE_CLIENT_ID:     string;
@@ -28,10 +30,10 @@ export default {
     return Response.json({ ok: true, service: 'icrv-consumer' });
   },
 
-  async queue(batch: MessageBatch<InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload>, env: ConsumerEnv): Promise<void> {
+  async queue(batch: MessageBatch<InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload | WebhookEventPayload>, env: ConsumerEnv): Promise<void> {
     for (const msg of batch.messages) {
       try {
-        const body = msg.body as InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload;
+        const body = msg.body as InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload | WebhookEventPayload;
 
         if (body.type === 'email_in') {
           if (await isDuplicate(env, body.id)) { msg.ack(); continue; }
@@ -49,6 +51,12 @@ export default {
         if (body.type === 'import_job') {
           if (await isDuplicate(env, body.id)) { msg.ack(); continue; }
           await processImportJob(body as ImportJobPayload, env);
+          msg.ack();
+          continue;
+        }
+
+        if (body.type === 'webhook_event') {
+          await processWebhookEvent(body as WebhookEventPayload, env);
           msg.ack();
           continue;
         }
@@ -71,7 +79,7 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<ConsumerEnv, InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload>;
+} satisfies ExportedHandler<ConsumerEnv, InboundEmailPayload | RetryPayload | QueuePayload | ImportJobPayload | WebhookEventPayload>;
 
 // ─── Inbound Gmail processing ───────────────────────────────────────────────
 
@@ -123,7 +131,7 @@ async function processGmailPush(p: InboundEmailPayload, env: ConsumerEnv): Promi
     if (existing) continue;
 
     const detailRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gid}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=References&metadataHeaders=In-Reply-To`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${gid}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=References&metadataHeaders=In-Reply-To&metadataHeaders=X-Failed-Recipients&metadataHeaders=Auto-Submitted&metadataHeaders=Content-Type`,
       { headers: { Authorization: `Bearer ${access_token}` } },
     );
     if (!detailRes.ok) continue;
@@ -134,10 +142,81 @@ async function processGmailPush(p: InboundEmailPayload, env: ConsumerEnv): Promi
     if (!det.labelIds?.includes('INBOX')) continue;
 
     const headers = det.payload?.headers ?? [];
-    const fromHeader = headers.find(h => h.name === 'From')?.value ?? '';
-    const subject    = headers.find(h => h.name === 'Subject')?.value ?? '';
-    // Extract email from "Name <addr@x>" or bare addr
+    const hdr = (n: string) => headers.find((h) => h.name.toLowerCase() === n.toLowerCase())?.value ?? '';
+    const fromHeader = hdr('From');
+    const subject    = hdr('Subject');
     const fromAddr = (fromHeader.match(/<([^>]+)>/)?.[1] ?? fromHeader).trim().toLowerCase();
+
+    // ── Bounce / DSN classification ──────────────────────────────────────
+    // Gmail delivers Delivery Status Notifications from mailer-daemon@*.
+    // Primary signal: X-Failed-Recipients header (Gmail-specific). Fallbacks:
+    // From regex + subject regex. Hard vs soft: parse 5.x.x / 4.x.x out of
+    // the snippet (Gmail puts the diagnostic in there).
+    const failedRecipients = hdr('X-Failed-Recipients').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const isDaemonFrom = /(?:mailer-daemon|postmaster)@/i.test(fromAddr);
+    const isFailureSubject = /delivery (status notification|failed|incomplete)|undeliverable|returned mail|failure notice/i.test(subject);
+
+    if (failedRecipients.length > 0 || (isDaemonFrom && isFailureSubject)) {
+      const recipients = failedRecipients.length > 0 ? failedRecipients
+                       : extractFailedFromSnippet(det.snippet ?? '');
+      const snippet = (det.snippet ?? '');
+      // 5.x.x = hard, 4.x.x = soft. Default to hard if unclassifiable — the
+      // operator-tunable hard_bounce_threshold (default 3) provides slack.
+      const codeMatch = snippet.match(/\b([45])\.\d+\.\d+\b/);
+      const isHard = !codeMatch || codeMatch[1] === '5';
+
+      for (const target of recipients) {
+        const c = await env.DB.prepare(
+          `SELECT id FROM contacts WHERE tenant_id = ? AND email = ? LIMIT 1`,
+        ).bind(token.tenant_id, target).first<{ id: string }>();
+        if (!c) continue;
+        await env.DB.prepare(
+          `UPDATE contacts SET ${isHard ? 'bounce_count' : 'complaint_count'} = COALESCE(${isHard ? 'bounce_count' : 'complaint_count'}, 0) + 1, updated_at = ? WHERE id = ?`,
+        ).bind(nowISO(), c.id).run();
+        await env.DB.prepare(
+          `INSERT INTO tracking_events (id, tenant_id, contact_id, type, url, ip, user_agent, occurred_at)
+           VALUES (?, ?, ?, 'bounce', ?, NULL, NULL, ?)`,
+        ).bind(uuidv4(), token.tenant_id, c.id, isHard ? 'hard' : 'soft', nowISO()).run();
+
+        // Customer webhook fan-out for the email_bounced event.
+        try {
+          const subs = await env.DB.prepare(
+            `SELECT id, url, secret FROM webhook_subscriptions WHERE tenant_id = ? AND event = 'email_bounced' AND is_active = 1`,
+          ).bind(token.tenant_id).all<{ id: string; url: string; secret: string }>();
+          for (const sub of subs.results ?? []) {
+            const deliveryId = uuidv4();
+            await env.DB.prepare(
+              `INSERT INTO webhook_deliveries (id, tenant_id, subscription_id, event, payload_json, status, attempt, created_at)
+               VALUES (?, ?, ?, 'email_bounced', ?, 'pending', 0, ?)`,
+            ).bind(deliveryId, token.tenant_id, sub.id, JSON.stringify({
+              tenant_id: token.tenant_id, contact_id: c.id, email: target,
+              kind: isHard ? 'hard' : 'soft', occurred_at: nowISO(),
+            }), nowISO()).run();
+            if (env.Q_WEBHOOK) {
+              await env.Q_WEBHOOK.send({
+                id: uuidv4(), type: 'webhook_event', tenant_id: token.tenant_id,
+                attempt: 1, enqueued_at: nowISO(),
+                delivery_id: deliveryId, subscription_id: sub.id,
+                event: 'email_bounced',
+                url: sub.url, secret: sub.secret,
+                body: { tenant_id: token.tenant_id, contact_id: c.id, email: target, kind: isHard ? 'hard' : 'soft' },
+                attempt_no: 0,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('[bounce] webhook enqueue failed', (err as Error).message);
+        }
+      }
+
+      // Mark the DSN message as processed so we don't re-handle on the next
+      // history poll. Using the messages table is intentional — same idempotency.
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO messages (id, tenant_id, contact_id, channel, direction, subject, body_text, provider_msg_id, status, created_at, updated_at, sent_at)
+         VALUES (?, ?, NULL, 'email', 'inbound', ?, ?, ?, 'bounce', ?, ?, ?)`,
+      ).bind(uuidv4(), token.tenant_id, subject.slice(0, 256), (det.snippet ?? '').slice(0, 1024), gid, nowISO(), nowISO(), nowISO()).run();
+      continue;
+    }
 
     const contact = await env.DB.prepare(
       `SELECT id FROM contacts WHERE tenant_id = ? AND email = ? LIMIT 1`,
@@ -176,6 +255,23 @@ async function processGmailPush(p: InboundEmailPayload, env: ConsumerEnv): Promi
   if (p.history_id) await env.KV_CONFIG.put(lastHistoryKey, p.history_id, { expirationTtl: 30 * 86400 });
 }
 
+// Best-effort extraction of failed-recipient emails out of a DSN snippet.
+// Gmail's snippet typically contains "Original-Recipient: rfc822;foo@bar"
+// or just lists the address inline. Falls back to the first plausible email.
+function extractFailedFromSnippet(snippet: string): string[] {
+  const out = new Set<string>();
+  const recipMatch = snippet.match(/Original-Recipient:[^;]*;\s*([^\s,>]+)/i);
+  if (recipMatch) out.add(recipMatch[1].toLowerCase());
+  const final = snippet.match(/Final-Recipient:[^;]*;\s*([^\s,>]+)/i);
+  if (final) out.add(final[1].toLowerCase());
+  // Generic email-shaped tokens
+  const generic = snippet.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+  for (const e of generic) {
+    if (!/mailer-daemon|postmaster|noreply/i.test(e)) out.add(e.toLowerCase());
+  }
+  return Array.from(out);
+}
+
 // ─── Retry processing ──────────────────────────────────────────────────────
 
 async function processRetry(p: RetryPayload, env: ConsumerEnv): Promise<void> {
@@ -193,6 +289,7 @@ async function processRetry(p: RetryPayload, env: ConsumerEnv): Promise<void> {
     case 'icrv-wa-in':          await env.Q_WA_IN.send(p.original_payload as never);     break;
     case 'icrv-voice-postcall': await env.Q_VOICE_POSTCALL.send(p.original_payload as never); break;
     case 'icrv-agent-jobs':     await env.Q_AGENT.send(p.original_payload as never);     break;
+    case 'icrv-webhooks':       if (env.Q_WEBHOOK) { await env.Q_WEBHOOK.send(p.original_payload as never); } break;
     default:
       await env.Q_DLQ.send({ ...p.original_payload, dlq_reason: `unknown_original_queue:${p.original_queue}`, dlq_at: nowISO() });
   }

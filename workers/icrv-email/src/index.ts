@@ -82,11 +82,15 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
   // a marketing safeguard so it doesn't apply either.
   const settings = await loadTenantSettings(env, p.tenant_id);
   if (!p.is_transactional) {
-    const street = (settings.compliance.physical_address?.street ?? '').trim();
-    if (!street || street === '__PLACEHOLDER__') {
-      await env.DB.prepare(`UPDATE messages SET status='failed', error='compliance_address_missing', updated_at=? WHERE id=?`)
+    const a = settings.compliance.physical_address ?? {};
+    const street = (a.street ?? '').trim();
+    const city   = (a.city ?? '').trim();
+    const region = (a.state ?? '').trim();
+    const zip    = (a.zip ?? '').trim();
+    if (!street || !city || !region || !zip) {
+      await env.DB.prepare(`UPDATE messages SET status='failed', error='compliance_address_incomplete', updated_at=? WHERE id=?`)
         .bind(nowISO(), p.message_id).run();
-      throw new Error('compliance_address_missing');
+      throw new Error('compliance_address_incomplete');
     }
 
     const dailyLimit = Number(settings.sending.daily_limit ?? 500);

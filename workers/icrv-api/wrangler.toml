@@ -83,6 +83,9 @@ binding = "Q_AGENT"
 queue   = "icrv-imports"
 binding = "Q_IMPORT"
 [[queues.producers]]
+queue   = "icrv-webhooks"
+binding = "Q_WEBHOOK"
+[[queues.producers]]
 queue   = "icrv-retry"
 binding = "Q_RETRY"
 [[queues.producers]]

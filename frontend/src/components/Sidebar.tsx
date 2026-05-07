@@ -22,7 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/analytics',icon:'∞', label: 'Analytics',   sublabel: 'Insights' },
   { path: '/templates',icon:'▤', label: 'Templates',   sublabel: 'Library' },
   { path: '/regional',icon: '◯', label: 'Regional',    sublabel: 'ME Outreach' },
-  { path: '/whatsapp/quotes',icon:'◐', label: 'WA Quotes', sublabel: 'Coming soon' },
+  { path: '/whatsapp/quotes',icon:'◐', label: 'WA Quotes', sublabel: 'Quotes' },
   { path: '/settings',icon: '⚙', label: 'Settings',    sublabel: 'Workspace' },
 ]
 
