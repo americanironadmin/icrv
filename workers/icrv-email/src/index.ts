@@ -107,8 +107,9 @@ async function sendEmail(p: EmailOutPayload, env: EmailEnv): Promise<{ ok: true;
   // Rewrite tracking links + add open pixel + List-Unsubscribe
   const trackingHost = p.tracking_domain || 'icrv-api.americanironus.com';
   const unsubUrl = await buildUnsubUrl(env, p, trackingHost);
+  const personalized = await personalize(env, p, p.html_body);
   const htmlBody = appendCanSpamFooter(
-    await injectTracking(p.html_body, p, trackingHost, env, settings),
+    await injectTracking(personalized, p, trackingHost, env, settings),
     settings, unsubUrl,
   );
   const headersExtra: string[] = [
@@ -333,6 +334,60 @@ async function loadTenantSettings(env: EmailEnv, tenantId: string): Promise<Tena
     sending:    safe(row?.sending_json),
     tracking:   safe(row?.tracking_json),
   };
+}
+
+// ─── Personalization (Phase 5) ─────────────────────────────────────────────
+// {{var_name}} resolution order:
+//   1. contacts.custom_fields_json[var_name]
+//   2. tenant_settings.personalization_json.variables[].default_value
+//   3. Empty string
+
+interface PersonalizationVar {
+  name: string;
+  default_value?: string;
+}
+
+async function personalize(env: EmailEnv, p: EmailOutPayload, html: string): Promise<string> {
+  if (!html.includes('{{')) return html;
+  const contact = await env.DB.prepare(
+    `SELECT name, email, phone_e164, country_code, industry, custom_fields_json
+       FROM contacts WHERE id = ? AND tenant_id = ?`,
+  ).bind(p.contact_id, p.tenant_id).first<{
+    name: string; email: string | null; phone_e164: string | null;
+    country_code: string | null; industry: string | null;
+    custom_fields_json: string | null;
+  }>();
+  const personRow = await env.DB.prepare(
+    `SELECT personalization_json FROM tenant_settings WHERE tenant_id = ?`,
+  ).bind(p.tenant_id).first<{ personalization_json: string }>();
+  const personalization: { variables?: PersonalizationVar[] } = personRow?.personalization_json
+    ? safeParseObj(personRow.personalization_json) as { variables?: PersonalizationVar[] }
+    : {};
+  const customFields: Record<string, string> = contact?.custom_fields_json
+    ? safeParseObj(contact.custom_fields_json) as Record<string, string>
+    : {};
+
+  const builtin: Record<string, string> = {
+    'contact.name':     contact?.name ?? '',
+    'contact.email':    contact?.email ?? '',
+    'contact.phone':    contact?.phone_e164 ?? '',
+    'contact.country':  contact?.country_code ?? '',
+    'contact.industry': contact?.industry ?? '',
+    'campaign.name':    p.campaign_id ?? '',
+    'workspace.company': '', // resolved at footer level
+  };
+
+  return html.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, key: string) => {
+    if (key === 'unsubscribe_url') return ''; // resolved separately by footer
+    if (Object.prototype.hasOwnProperty.call(builtin, key)) return builtin[key];
+    if (Object.prototype.hasOwnProperty.call(customFields, key)) return customFields[key];
+    const def = (personalization.variables ?? []).find((v) => v.name === key);
+    return def?.default_value ?? '';
+  });
+}
+
+function safeParseObj(s: string): Record<string, unknown> {
+  try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; }
 }
 
 function appendCanSpamFooter(html: string, settings: TenantSettingsView, unsubUrl: string): string {

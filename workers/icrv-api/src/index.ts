@@ -27,6 +27,8 @@ import { createSettingsRouter } from './routes/settings';
 import { createEmailAuthRouter } from './routes/email-auth';
 import { createLeadsRouter } from './routes/leads';
 import { createAnalyticsRouter } from './routes/analytics';
+import { createApiKeysRouter } from './routes/api-keys';
+import { createBouncesRouter } from './routes/bounces';
 import { handleUnsubscribe, handleTrackOpen, handleTrackClick } from './routes/public';
 import { encryptSecret, uuidv4, nowISO } from '@icrv/shared/crypto';
 import { rateLimit, cfIp } from '@icrv/shared/rate-limit';
@@ -233,10 +235,12 @@ v1.route('/templates', createTemplatesRouter());
 v1.route('/calls',     createCallsRouter());
 v1.route('/dashboard', createDashboardRouter());
 v1.route('/logs',      createLogsRouter());
+v1.route('/settings/api_webhooks', createApiKeysRouter());  // mounted BEFORE /settings so /generate-key matches first
 v1.route('/settings',  createSettingsRouter());
 v1.route('/auth',      createEmailAuthRouter());  // /v1/auth/check-{dkim,spf,dmarc} — same prefix as createAuthRouter, second mount adds these endpoints
 v1.route('/leads',     createLeadsRouter());
 v1.route('/analytics', createAnalyticsRouter());
+v1.route('/bounces',   createBouncesRouter());
 
 // /v1/agent-controls/* — defense-in-depth: viewers blocked at the gateway in
 // addition to whatever icrv-agent enforces internally. Closes the M6 risk where

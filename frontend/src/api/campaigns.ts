@@ -59,6 +59,7 @@ export interface Template {
   body_html?: string
   body_text?: string
   template_name?: string  // WA template name
+  tags?: string[]
   created_at: string
 }
 
@@ -100,4 +101,10 @@ export const campaignsApi = {
 
   createTemplate: (t: Omit<Template, 'id' | 'created_at'>): Promise<Template> =>
     post<Template>('/v1/templates', t),
+
+  updateTemplate: (id: string, patch: Partial<Template>): Promise<{ id: string; ok: boolean }> =>
+    put<{ id: string; ok: boolean }>(`/v1/templates/${id}`, patch as Record<string, unknown>),
+
+  deleteTemplate: (id: string): Promise<{ deleted: boolean }> =>
+    del<{ deleted: boolean }>(`/v1/templates/${id}`),
 }
